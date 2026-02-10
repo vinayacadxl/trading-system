@@ -9,6 +9,8 @@ import Dashboard from "@/pages/dashboard";
 import BotControl from "@/pages/bot-control";
 import TradeHistory from "@/pages/trade-history";
 import SettingsPage from "@/pages/settings";
+import StrategyTester from "@/pages/strategy-tester";
+import LiveDataPage from "@/pages/live-data";
 
 function Router() {
   return (
@@ -17,6 +19,8 @@ function Router() {
         <Route path="/" component={Dashboard} />
         <Route path="/bot" component={BotControl} />
         <Route path="/history" component={TradeHistory} />
+        <Route path="/tester" component={StrategyTester} />
+        <Route path="/live" component={LiveDataPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route component={NotFound} />
       </Switch>

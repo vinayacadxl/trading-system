@@ -29,10 +29,21 @@ export async function setupVite(server: Server, app: Express) {
     appType: "custom",
   });
 
-  app.use(vite.middlewares);
+  // /api requests ko Vite/catch-all se skip karo – API routes handle karenge
+  const isApiRequest = (req: { path?: string; originalUrl?: string }) =>
+    (req.originalUrl || req.path || "").startsWith("/api");
+  app.use((req, res, next) => {
+    if (isApiRequest(req)) return next();
+    vite.middlewares(req, res, next);
+  });
 
-  app.use("/{*path}", async (req, res, next) => {
-    const url = req.originalUrl;
+  // Catch-all for SPA: only serve HTML for non-API (API must never get HTML).
+  app.use(async (req, res, next) => {
+    const pathname = (req.originalUrl || req.path || "").split("?")[0];
+    if (pathname.startsWith("/api")) {
+      return res.status(404).set("Content-Type", "application/json").json({ success: false, error: "API route not found" });
+    }
+    const url = req.originalUrl || req.path || "/";
 
     try {
       const clientTemplate = path.resolve(
