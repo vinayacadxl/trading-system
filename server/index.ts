@@ -61,9 +61,9 @@ export function log(message: string, source = "bot") {
     await setupVite(app, httpServer);
   }
 
-  const port = 5001;
+  const port = Number(process.env.PORT) || 5001;
   httpServer.listen(port, "0.0.0.0", () => {
-    log(`📊 Dashboard ready at http://localhost:${port}`);
+    log(`📊 Dashboard ready at http://0.0.0.0:${port}`);
   });
 
   // --- 🧠 START PYTHON BRAIN LAYER (MARKET FILTER) ---
@@ -80,15 +80,18 @@ export function log(message: string, source = "bot") {
     pyProcess.on("error", (err: any) => {
       if (err.code === 'ENOENT') {
         log(`Python command '${cmd}' not found.`, "filter");
-        if (cmd === "python3") {
-          log("Retrying with 'python'...", "filter");
-          spawnPythonFilter("python");
-        } else if (cmd === "python") {
-          log("Retrying with 'py'...", "filter");
-          spawnPythonFilter("py");
-        } else {
-          log("Critical: Python is not installed or not in PATH.", "filter");
-        }
+        // Add a small delay before retrying to ensure we don't hit a tight loop
+        setTimeout(() => {
+          if (cmd === "python3") {
+            log("Retrying with 'python'...", "filter");
+            spawnPythonFilter("python");
+          } else if (cmd === "python") {
+            log("Retrying with 'py'...", "filter");
+            spawnPythonFilter("py");
+          } else {
+            log("Critical: Python is not installed or not in PATH.", "filter");
+          }
+        }, 1000);
       } else {
         log(`Python filter process error: ${err.message}`, "filter");
       }
