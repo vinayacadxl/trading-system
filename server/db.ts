@@ -1,26 +1,10 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
-import * as schema from '@shared/schema';
 import 'dotenv/config';
 
-let dbInstance: any = null;
-let poolInstance: any = null;
+/**
+ * 🚀 High-Performance Local-Memory Storage
+ * Database has been disabled as per user request.
+ * All state is now handled in-memory for zero-latency execution.
+ */
 
-try {
-    if (process.env.DATABASE_URL) {
-        poolInstance = new pg.Pool({
-            connectionString: process.env.DATABASE_URL,
-            max: 1,
-            idleTimeoutMillis: 30000,
-        });
-        dbInstance = drizzle(poolInstance, { schema });
-        console.log("⚡ Database active: Persistent logging enabled.");
-    } else {
-        console.log("🚀 Running in High-Performance Local-Memory mode (No Database).");
-    }
-} catch (e) {
-    console.error("❌ Database initialization failed, continuing without DB:", e);
-}
-
-export const pool = poolInstance;
-export const db = dbInstance;
+export const pool = null;
+export const db = null;

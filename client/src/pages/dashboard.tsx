@@ -184,7 +184,7 @@ export default function Dashboard() {
                 </div>
 
                 {/* Chart + Side panel */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
+                <div className="dash-main-grid">
                     {/* Chart */}
                     <div className="chart-box">
                         <div className="chart-hd">

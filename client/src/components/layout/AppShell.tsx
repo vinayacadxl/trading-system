@@ -18,7 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     return (
         <div className="app-layout">
-            {/* ─── Sidebar ─────────────────────────────── */}
+            {/* ─── Sidebar (Desktop) ─────────────────────────────── */}
             <aside className="sidebar">
                 <div className="sb-logo">
                     <Zap size={20} className="icon" />
@@ -48,6 +48,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {/* ─── Content ─────────────────────────────── */}
             <div className="main-area">
                 {children}
+
+                {/* ─── Mobile Bottom Nav ──────────────────────── */}
+                <nav className="mobile-nav">
+                    {NAV.map(({ to, Icon, label }) => {
+                        const active = to === "/" ? loc === "/" : loc.startsWith(to);
+                        return (
+                            <Link key={to} href={to}>
+                                <a className={`m-nav-item${active ? " active" : ""}`}>
+                                    <Icon size={20} />
+                                    <span>{label}</span>
+                                </a>
+                            </Link>
+                        );
+                    })}
+                </nav>
             </div>
         </div>
     );

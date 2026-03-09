@@ -108,7 +108,7 @@ export default function BotControl() {
             </div>
 
             <div className="page">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+                <div className="bot-config-grid">
                     {/* Strategy */}
                     <div className="card">
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
@@ -118,13 +118,13 @@ export default function BotControl() {
                         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--bdr)", borderRadius: 10, padding: "16px", marginBottom: 16 }}>
                             <div style={{ fontSize: 14, fontWeight: 800, color: "var(--tx1)", marginBottom: 8 }}>{model.name}</div>
                             <div style={{ fontSize: 11, color: "var(--tx2)", lineHeight: 1.6, marginBottom: 14 }}>{model.desc}</div>
-                            <div style={{ display: "flex", gap: 8 }}>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <span className="bd ip" style={{ fontSize: 9 }}>Lev {model.leverage}x</span>
                                 <span className="bd c" style={{ fontSize: 9 }}>{model.rr}</span>
                                 <span className="bd p" style={{ fontSize: 9 }}>{model.type}</span>
                             </div>
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
                             <div className="form-group">
                                 <label className="form-label">Symbol</label>
                                 <select className={inputCls} value={symbol} onChange={(e) => setSymbol(e.target.value)}>
@@ -167,7 +167,7 @@ export default function BotControl() {
                             </div>
                             <div style={{ textAlign: "center", fontSize: 12, fontWeight: 700, color: "var(--indigo)", marginTop: 4 }}>{maxPositions} positions</div>
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
                             <ValBox label="Risk Amount" value={`$${(bal * riskPct / 100).toFixed(2)}`} tone="g" />
                             <ValBox label="Max Positions" value={String(maxPositions)} tone="p" />
                         </div>
@@ -200,7 +200,7 @@ export default function BotControl() {
                 {botStatus && (
                     <div className="card">
                         <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 14 }}>Live Status</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+                        <div className="bot-status-grid">
                             <ValBox label="Active Monitors" value={String(botStatus?.activeMonitors ?? 0)} tone="p" />
                             <ValBox label="Trade Count" value={String(botStatus?.tradeCount ?? 0)} tone="g" />
                             <ValBox label="Open Positions" value={String(botStatus?.openPositions ?? 0)} tone="p" />
@@ -228,9 +228,9 @@ export default function BotControl() {
 function ValBox({ label, value, tone }: { label: string; value: string; tone?: "g" | "r" | "p" }) {
     const vc = tone === "g" ? "var(--green)" : tone === "r" ? "var(--red)" : tone === "p" ? "var(--brand)" : "var(--tx1)";
     return (
-        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--bdr)", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 6 }}>{label}</div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 14, fontWeight: 800, color: vc }}>{value}</div>
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--bdr)", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
+            <div style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 800, color: vc, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
         </div>
     );
 }

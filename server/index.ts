@@ -67,13 +67,14 @@ export function log(message: string, source = "bot") {
   });
 
   // --- 🧠 START PYTHON BRAIN LAYER (MARKET FILTER) ---
-  const spawnPythonFilter = (cmd = "python3") => {
+  const spawnPythonFilter = (cmd = process.platform === 'win32' ? "python" : "python3") => {
     const pyPath = path.join(__dirname, "../python_service/market_filter.py");
     log(`Launching Python Market Filter: ${pyPath} (using ${cmd})`);
 
     // -X utf8 flag: Force Python to use UTF-8 (fixes emoji/unicode issues)
     const pyProcess = spawn(cmd, ["-X", "utf8", pyPath], {
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }
+      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      shell: process.platform === 'win32' // Use shell on Windows to find python in PATH
     });
 
     pyProcess.on("error", (err: any) => {
@@ -82,6 +83,9 @@ export function log(message: string, source = "bot") {
         if (cmd === "python3") {
           log("Retrying with 'python'...", "filter");
           spawnPythonFilter("python");
+        } else if (cmd === "python") {
+          log("Retrying with 'py'...", "filter");
+          spawnPythonFilter("py");
         } else {
           log("Critical: Python is not installed or not in PATH.", "filter");
         }
@@ -101,7 +105,7 @@ export function log(message: string, source = "bot") {
     });
   };
 
-  spawnPythonFilter("python3"); // Start with python3 as it's standard on Linux/Docker
+  spawnPythonFilter(); // Automatically picks based on platform
 
   // --- ⚡ DELTA WEBSOCKET & TRADER INITIALIZATION ---
   const { startDeltaSocket } = await import("./delta-socket");
