@@ -106,8 +106,15 @@ class MultiSymbolManager {
     }
 
     /**
-     * Optimized for VISIBILITY and PRECISION.
-     * 100% now only possible if: Confidence is high (>90%) AND Regime is trending/breakout AND AI/Technical alignment.
+     * 🧠 DYNAMIC AI Scoring — Regime-Aware Weight System
+     *
+     * Market har time same behave nahi karta, isliye weights dynamically
+     * adjust hote hain based on detected regime:
+     *
+     *  TRENDING/BREAKOUT → AI Probability reliable, high regime bonus
+     *  RANGE             → Technical Confidence reliable, moderate bonus
+     *  HIGH_VOLATILITY   → AI heavy, lower caps to reduce risk
+     *  Default/Unknown   → Balanced split
      */
     calculateSignalStrength(
         direction: "buy" | "sell" | "neutral",
@@ -117,44 +124,117 @@ class MultiSymbolManager {
     ): number {
         if (direction === "neutral") return 0;
 
-        let strength = 0;
+        // --- Step 1: Pick dynamic weights based on market regime ---
+        const weights = this._getDynamicWeights(regime);
+
+        // --- Step 2: Base Score (0–60 pts) ---
         const useTechnicalFallback = !aiProbability || aiProbability === 0.5;
+        let strength = 0;
 
-        // 1. BASE LOGIC (Max 60 points)
         if (useTechnicalFallback) {
-            // Confidence 100% = 60 strength base
-            strength += Math.min(confidence * 0.60, 60);
+            // No AI probability available → use confidence only
+            strength += Math.min(confidence * weights.confOnlyWt, 60);
         } else {
-            // Split between confidence and AI prob
-            strength += Math.min(confidence * 0.30, 30);
-            strength += Math.min(aiProbability * 100 * 0.30, 30);
+            strength += Math.min(confidence * weights.confWt, 30);
+            strength += Math.min(aiProbability * 100 * weights.aiWt, 30);
         }
 
-        // 2. REGIME & TREND CONFIRMATION (Max 30 points)
-        // High quality signals need market structure support
+        // --- Step 3: Regime Confirmation Bonus (0–20 pts) ---
         const isStrongRegime = regime.includes("TRENDING") || regime.includes("BREAKOUT");
-        if (isStrongRegime) {
-            strength += 20;
-        } else if (regime.includes("TREND") || regime.includes("RANGE")) {
-            strength += 10;
+        strength += isStrongRegime ? weights.regimeBonusStrong : weights.regimeBonusWeak;
+
+        // --- Step 4: Momentum Gate (0–10 pts) ---
+        // Only full points if confidence meets the dynamic threshold
+        if (confidence >= weights.momentumThreshold) {
+            strength += weights.momentumPts;
+        } else if (confidence >= weights.momentumThreshold * 0.8) {
+            // Partial credit for near-threshold confidence
+            strength += weights.momentumPts * 0.5;
         }
 
-        // 3. MOMENTUM & VOLATILITY GATE (Max 10 points)
-        // Only get the final 10 points if confidence is very high (execution ready)
-        if (confidence >= 90) {
-            strength += 10;
-        }
-
-        // 4. CAPS & FINAL ROUNDING
+        // --- Step 5: Final cap & visibility rule ---
         const rounded = Math.round(strength);
 
-        // VISIBILITY RULE: 100% should only appear when actually ready to execute
-        // If it's a weak regime or low confidence, cap it at 85%
-        if (rounded >= 95 && (!isStrongRegime || confidence < 90)) {
+        // Cap at 85 if regime is weak OR confidence is low
+        if (rounded >= 95 && (!isStrongRegime || confidence < weights.momentumThreshold)) {
             return 85;
         }
 
         return Math.min(rounded, 100);
+    }
+
+    /**
+     * Returns dynamic scoring weights based on the current market regime.
+     *
+     * | Regime           | confWt | aiWt | regimeBonus | momentumThreshold |
+     * |------------------|--------|------|-------------|-------------------|
+     * | TRENDING/BREAKOUT| 0.25   | 0.35 | 20 / 12     | 80                |
+     * | RANGE            | 0.40   | 0.20 | 15 / 8      | 85                |
+     * | HIGH_VOLATILITY  | 0.15   | 0.45 | 10 / 5      | 90                |
+     * | Default          | 0.30   | 0.30 | 12 / 8      | 85                |
+     */
+    private _getDynamicWeights(regime: string): {
+        confWt: number;
+        aiWt: number;
+        confOnlyWt: number;
+        regimeBonusStrong: number;
+        regimeBonusWeak: number;
+        momentumThreshold: number;
+        momentumPts: number;
+    } {
+        const isTrending = regime.includes("TRENDING") || regime.includes("BREAKOUT");
+        const isRange = regime.includes("RANGE");
+        const isHighVol = regime.includes("VOLATILITY") || regime.includes("HIGH");
+
+        if (isTrending) {
+            // TREND market: AI probability tracks momentum well
+            return {
+                confWt: 0.25,       // 25% weight to technical confidence
+                aiWt: 0.35,         // 35% weight to AI probability (trend-reliable)
+                confOnlyWt: 0.60,   // fallback without AI
+                regimeBonusStrong: 20,
+                regimeBonusWeak: 12,
+                momentumThreshold: 80,  // lower bar — trend gives extra conviction
+                momentumPts: 10,
+            };
+        }
+
+        if (isRange) {
+            // RANGE market: Technical indicators (RSI, BB) more reliable than AI trend models
+            return {
+                confWt: 0.40,       // higher technical weight
+                aiWt: 0.20,         // AI less useful in choppy markets
+                confOnlyWt: 0.60,
+                regimeBonusStrong: 15,
+                regimeBonusWeak: 8,
+                momentumThreshold: 85, // need higher confidence before executing
+                momentumPts: 7,
+            };
+        }
+
+        if (isHighVol) {
+            // HIGH VOLATILITY: AI can catch spike direction, but overall score capped lower
+            return {
+                confWt: 0.15,       // technical indicators unreliable in spikes
+                aiWt: 0.45,         // AI probability drives the score
+                confOnlyWt: 0.50,   // lower fallback cap
+                regimeBonusStrong: 10,
+                regimeBonusWeak: 5,
+                momentumThreshold: 90, // stricter gate — volatility = higher risk
+                momentumPts: 5,     // smaller momentum bonus
+            };
+        }
+
+        // Default / unknown regime: balanced
+        return {
+            confWt: 0.30,
+            aiWt: 0.30,
+            confOnlyWt: 0.60,
+            regimeBonusStrong: 12,
+            regimeBonusWeak: 8,
+            momentumThreshold: 85,
+            momentumPts: 8,
+        };
     }
 }
 

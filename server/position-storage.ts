@@ -129,7 +129,7 @@ export async function getStoredActivePositions(): Promise<Array<{ symbol: string
 /** Cleanup positions that are no longer reported by Delta */
 export async function cleanupOldEntries(activeKeys: string[]): Promise<void> {
     const keysToDelete: string[] = [];
-    for (const key of memActivePositions.keys()) {
+    for (const key of Array.from(memActivePositions.keys())) {
         if (!activeKeys.includes(key)) {
             keysToDelete.push(key);
         }
