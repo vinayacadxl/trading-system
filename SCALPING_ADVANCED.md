@@ -28,13 +28,15 @@ SCALP_SPREAD_MAX_PCT=0.15
 | Env variable | Default | Advance tip |
 |--------------|---------|-------------|
 | `SCALP_TP_PCT` | 0.35 | **0.45–0.6** = bada target, R:R improve (SL same rakh kar) |
+| **`SCALP_TP_USD`** | **4** | **Advance profit booking:** jab unrealized profit is amount (USD) ke barabar ho, position close. E.g. **4** = $4 profit pe book. 0 = off (sirf % TP use) |
 | `SCALP_SL_PCT` | -0.25 | **-0.2** = tight SL (fast cut), **-0.35** = thoda room |
 | `SCALP_TRAIL_PCT` | 0.15 | **0.12** = jaldi trail lock, **0.2** = zyada room |
 | `SCALP_MAX_HOLD_S` | 60 | **90–120** = hold longer for TP; **45** = quick scalp only |
 
-**Example (better R:R):**
+**Example (better R:R + $4 profit book):**
 ```env
 SCALP_TP_PCT=0.5
+SCALP_TP_USD=4
 SCALP_SL_PCT=-0.25
 SCALP_TRAIL_PCT=0.12
 SCALP_MAX_HOLD_S=90

@@ -52,6 +52,8 @@ const POSITION_CONFIG = {
     MAX_HOLDING_TIME: parseInt(process.env.SCALP_MAX_HOLD_S || "60", 10),
     STOP_LOSS_PCT: _slPct > 0 ? -_slPct : _slPct,
     TAKE_PROFIT_PCT: parseFloat(process.env.SCALP_TP_PCT || "0.35"),
+    /** Advance profit booking: jab unrealized profit is amount (USD) ke barabar ho, close. Default 4 */
+    TAKE_PROFIT_USD: parseFloat(process.env.SCALP_TP_USD || "4"),
     TRAILING_OFFSET_PCT: parseFloat(process.env.SCALP_TRAIL_PCT || "0.15"),
     MIN_CONFIDENCE_HOLD: parseFloat(process.env.SCALP_MIN_CONF_HOLD || "0.7"),
     CONFIDENCE_EXIT_THRESHOLD: parseFloat(process.env.SCALP_CONF_EXIT || "0.5"),
@@ -130,6 +132,10 @@ export async function handleTickerUpdate(symbol: string, currentPrice: number): 
         if (entryPrice <= 0 || !entryTime) continue;
 
         const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100 * (side === 'buy' ? 1 : -1);
+        const absSize = Math.abs(size);
+        const pnlUsd = side === 'buy'
+            ? absSize * (currentPrice - entryPrice)
+            : absSize * (entryPrice - currentPrice);
         const holdingSec = (Date.now() - entryTime) / 1000;
         const confidence = calculateConfidence(symbol, side, entryPrice, currentPrice);
 
@@ -150,6 +156,12 @@ export async function handleTickerUpdate(symbol: string, currentPrice: number): 
         // C. Confidence Drop Exit (< 0.5)
         if (confidence < POSITION_CONFIG.CONFIDENCE_EXIT_THRESHOLD && pnlPercent > 0.1) {
             await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `📉 CONFIDENCE DROP: ${confidence.toFixed(2)}`);
+            continue;
+        }
+
+        // C.5. Advance profit booking: USD target (e.g. $4) – jitna aacha amount, utna book
+        if (POSITION_CONFIG.TAKE_PROFIT_USD > 0 && pnlUsd >= POSITION_CONFIG.TAKE_PROFIT_USD) {
+            await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `✅ TP (USD): $${pnlUsd.toFixed(2)}`);
             continue;
         }
 
