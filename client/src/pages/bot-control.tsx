@@ -1,309 +1,236 @@
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
-import { Play, Square, Settings2, ShieldAlert, Cpu, Wallet, BarChart3 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useToast } from "@/hooks/use-toast";
+import { Play, Square, Settings2, ShieldAlert, Cpu, Wallet, BarChart3, AlertTriangle, RotateCcw, Trash2 } from "lucide-react";
 import { usePortfolio } from "@/hooks/use-portfolio";
-import { Link } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 
 const ALL_MODELS = [
-  { id: "pro_sniper_v3", name: "Pro Sniper V3", leverage: 25, rr: "3:1", type: "adaptive", desc: "Balanced quality trades with 3:1 RR" },
-  { id: "lightning_scalper", name: "Lightning Scalper", leverage: 15, rr: "3:1", type: "adaptive", desc: "Golden Scalp - Triple Trend Filter & High Frequency" },
-  { id: "momentum_master", name: "Momentum Master", leverage: 35, rr: "4:1", type: "adaptive", desc: "Aggressive momentum trading - High Risk" },
-  { id: "trend_rider", name: "Trend Rider", leverage: 15, rr: "2.5:1", type: "adaptive", desc: "Conservative trend following - Steady Gains" },
-  { id: "ema_crossover", name: "Basic EMA Crossover", leverage: 10, rr: "Dynamic", type: "legacy", desc: "Simple trend following using EMA20" },
-  { id: "rsi", name: "Basic RSI Reversal", leverage: 10, rr: "Dynamic", type: "legacy", desc: "Mean reversion based on overbought/oversold" }
+    {
+        id: "alpha_one",
+        name: "🎯 ALPHA ONE — Profit Mode (AI Brain)",
+        leverage: 20,
+        rr: "1:3.3 R:R (Golden Ratio)",
+        type: "adaptive",
+        desc: "Sniper: 60%+ win-rate target. High-conviction setups only. Elite trend alignment (EMA200), accelerators (ADX 25+) & adaptive filters.",
+    },
 ];
 
 export default function BotControl() {
-  const [isRunning, setIsRunning] = useState(false);
-  const [symbol, setSymbol] = useState("BTCUSD");
-  const [resolution, setResolution] = useState("15m");
-  const [selectedModel, setSelectedModel] = useState("lightning_scalper");
-  const [riskPct, setRiskPct] = useState(1.5);
-  const [maxDailyLossPct, setMaxDailyLossPct] = useState(5);
-  const { toast } = useToast();
-  const { data: portfolio } = usePortfolio(60_000);
+    const [isRunning, setIsRunning] = useState(false);
+    const [symbol, setSymbol] = useState("BTCUSD");
+    const [resolution, setResolution] = useState("15m");
+    const [selectedModel] = useState("alpha_one");
+    const [riskPct, setRiskPct] = useState(1.5);
+    const [maxPositions, setMaxPositions] = useState(2);
+    const [loading, setLoading] = useState(false);
+    const [botStatus, setBotStatus] = useState<any>(null);
+    const { data: portfolio } = usePortfolio(20_000);
+    const { toast } = useToast();
 
-  useEffect(() => {
-    fetch("/api/bot/status")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.config) {
-          setIsRunning(!!data.running);
-          if (data.config.symbol) setSymbol(data.config.symbol);
-          if (data.config.resolution) setResolution(data.config.resolution);
-          if (data.config.strategyType === "adaptive") {
-            setSelectedModel(data.config.strategyPreset || "pro_sniper_v3");
-          } else {
-            setSelectedModel(data.config.strategyType || "ema_crossover");
-          }
-          if (data.config.riskPct != null) setRiskPct(Number(data.config.riskPct));
-          if (data.config.maxDailyLossPct != null) setMaxDailyLossPct(Number(data.config.maxDailyLossPct));
-        }
-      })
-      .catch(() => { });
-  }, []);
+    const model = ALL_MODELS.find((m) => m.id === selectedModel) ?? ALL_MODELS[0];
+    const bal = portfolio ? parseFloat(String(portfolio.portfolioValue ?? "0")) : 0;
 
-  const saveConfig = () => {
-    const modelInfo = ALL_MODELS.find(m => m.id === selectedModel);
-    fetch("/api/bot/config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        symbol,
-        resolution,
-        strategyType: modelInfo?.type === "adaptive" ? "adaptive" : selectedModel as any,
-        strategyPreset: modelInfo?.type === "adaptive" ? selectedModel : "pro_sniper_v3",
-        riskPct,
-        maxDailyLossPct,
-      }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          toast({ title: "Configuration saved", description: "Strategy Tester will use this symbol and timeframe.", variant: "default" });
-        } else toast({ title: "Save failed", description: data.error, variant: "destructive" });
-      })
-      .catch(() => toast({ title: "Save failed", description: "Network error", variant: "destructive" }));
-  };
+    useEffect(() => {
+        fetch("/api/bot/status").then((r) => r.json()).then((d) => { setBotStatus(d); setIsRunning(d?.running ?? false); }).catch(() => { });
+        const t = setInterval(() => {
+            fetch("/api/bot/status").then((r) => r.json()).then((d) => setBotStatus(d)).catch(() => { });
+        }, 5000);
+        return () => clearInterval(t);
+    }, []);
 
-  const handleToggle = () => {
-    if (isRunning) {
-      fetch("/api/bot/stop", { method: "POST" })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setIsRunning(false);
-            toast({ title: "Bot Stopped", description: "Trading operations halted.", variant: "destructive" });
-          }
-        })
-        .catch(() => { });
-    } else {
-      const modelInfo = ALL_MODELS.find(m => m.id === selectedModel);
-      fetch("/api/bot/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol,
-          resolution,
-          strategyType: modelInfo?.type === "adaptive" ? "adaptive" : selectedModel as any,
-          strategyPreset: modelInfo?.type === "adaptive" ? selectedModel : "pro_sniper_v3",
-          riskPct,
-          maxDailyLossPct
-        }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setIsRunning(true);
-            toast({ title: "Bot Started", description: "Bot is now active and scanning markets.", variant: "default" });
-          } else toast({ title: "Start failed", description: data.error, variant: "destructive" });
-        })
-        .catch(() => { });
+    async function startBot() {
+        setLoading(true);
+        try {
+            const r = await fetch("/api/bot/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbol, resolution, strategy: selectedModel, riskPercent: riskPct, maxPositions }),
+            });
+            const d = await r.json();
+            if (r.ok) { setIsRunning(true); toast({ title: "Bot started ✅", description: `Trading ${symbol} on ${resolution}` }); }
+            else { toast({ title: "Error", description: d?.message ?? "Could not start bot", variant: "destructive" }); }
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+        setLoading(false);
     }
-  };
 
-  const strategyTesterUrl = `/tester?symbol=${encodeURIComponent(symbol)}&resolution=${encodeURIComponent(resolution)}`;
+    async function stopBot() {
+        setLoading(true);
+        try {
+            const r = await fetch("/api/bot/stop", { method: "POST" });
+            if (r.ok) { setIsRunning(false); toast({ title: "Bot stopped", description: "All active monitors stopped" }); }
+            else { toast({ title: "Error stopping bot", variant: "destructive" }); }
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+        setLoading(false);
+    }
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Bot Configuration</h1>
-          <p className="text-muted-foreground mt-1">Manage strategy parameters and risk controls.</p>
-        </div>
-        <div className="flex items-center space-x-4">
-          <div className={`px-4 py-1.5 rounded-full text-sm font-mono font-bold flex items-center border ${isRunning ? 'bg-green-500/10 text-green-500 border-green-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>
-            <div className={`w-2 h-2 rounded-full mr-2 ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-            {isRunning ? 'RUNNING' : 'STOPPED'}
-          </div>
-        </div>
-      </div>
+    async function resetBotState() {
+        try {
+            const r = await fetch("/api/bot/reset", { method: "POST" });
+            if (r.ok) { toast({ title: "Bot state reset ✅" }); }
+            else { toast({ title: "Reset failed", variant: "destructive" }); }
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+    }
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    async function closeAllPositions() {
+        if (!confirm("Close ALL open positions? This cannot be undone.")) return;
+        try {
+            const r = await fetch("/api/bot/close-all", { method: "POST" });
+            const d = await r.json();
+            toast({ title: r.ok ? "Positions closed ✅" : "Error", description: d?.message, variant: r.ok ? "default" : "destructive" });
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+    }
 
-        {/* Strategy Configuration */}
-        <Card className="glass-card border-t-4 border-t-primary">
-          <CardHeader>
-            <div className="flex items-center space-x-2">
-              <Cpu className="w-5 h-5 text-primary" />
-              <CardTitle>Strategy Engine</CardTitle>
-            </div>
-            <CardDescription>Select and configure trading logic. Trades scale with account balance.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {portfolio?.suggestedMaxPositionUsd != null && Number(portfolio.suggestedMaxPositionUsd) > 0 && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/10 border border-primary/20 text-sm font-mono">
-                <Wallet className="w-4 h-4 text-primary" />
-                <span className="text-muted-foreground">Auto sizing:</span>
-                <span className="text-white font-bold">max ${Number(portfolio.suggestedMaxPositionUsd).toFixed(2)} per trade</span>
-                <span className="text-muted-foreground">(5% of balance)</span>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label>Trading Symbol</Label>
-              <Select value={symbol} onValueChange={setSymbol}>
-                <SelectTrigger className="font-mono">
-                  <SelectValue placeholder="Select Pair" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="BTCUSD">BTC/USD</SelectItem>
-                  <SelectItem value="ETHUSD">ETH/USD</SelectItem>
-                  <SelectItem value="SOLUSD">SOL/USD</SelectItem>
-                  <SelectItem value="XRPUSD">XRP/USD</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+    const inputCls = "form-input";
 
-            <div className="space-y-2">
-              <Label>Timeframe</Label>
-              <Select value={resolution} onValueChange={setResolution}>
-                <SelectTrigger className="font-mono">
-                  <SelectValue placeholder="Select Timeframe" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1m">1 Minute</SelectItem>
-                  <SelectItem value="5m">5 Minutes</SelectItem>
-                  <SelectItem value="15m">15 Minutes</SelectItem>
-                  <SelectItem value="1h">1 Hour</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Trends differ by timeframe. See Strategy Tester for backtest on this resolution.</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Trading Model</Label>
-              <Select value={selectedModel} onValueChange={setSelectedModel}>
-                <SelectTrigger className="border-primary/40 bg-primary/5">
-                  <SelectValue placeholder="Select Model" />
-                </SelectTrigger>
-                <SelectContent>
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Smart Models</div>
-                  {ALL_MODELS.filter(m => m.type === 'adaptive').map(m => (
-                    <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                  ))}
-                  <div className="px-2 py-1.5 mt-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Basic Indicators</div>
-                  {ALL_MODELS.filter(m => m.type === 'legacy').map(m => (
-                    <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {selectedModel && (
-              <div className="p-3 rounded-lg bg-black/40 border border-white/5 space-y-2 animate-in fade-in zoom-in-95 duration-300">
-                <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-bold text-primary uppercase">Model Profile</span>
-                  <span className="text-[10px] font-mono text-muted-foreground italic">v2.4.0-stable</span>
+    return (
+        <>
+            <div className="topbar">
+                <div>
+                    <div className="topbar-title">Bot Control</div>
+                    <div className="topbar-sub">Configure and manage your trading bot</div>
                 </div>
-                <p className="text-sm font-medium text-white">{ALL_MODELS.find(m => m.id === selectedModel)?.name}</p>
-                <p className="text-xs text-muted-foreground line-clamp-2">{ALL_MODELS.find(m => m.id === selectedModel)?.desc}</p>
-                <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-white/5">
-                  <div>
-                    <p className="text-[10px] text-muted-foreground">Est. RR Ratio</p>
-                    <p className="text-xs font-mono text-green-500 font-bold">{ALL_MODELS.find(m => m.id === selectedModel)?.rr}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-muted-foreground">Default Lev.</p>
-                    <p className="text-xs font-mono text-primary font-bold">{ALL_MODELS.find(m => m.id === selectedModel)?.leverage}x</p>
-                  </div>
+                <div className="topbar-right">
+                    <div title={bal > 0 ? "Live account balance" : "Estimated balance"}
+                        className="price-pill"
+                        style={{
+                            background: "rgba(255,255,255,0.03)",
+                            border: '1px solid var(--bdr)',
+                            color: "var(--green)",
+                            cursor: "help",
+                        }}>
+                        <Wallet size={11} />
+                        ${bal.toFixed(2)}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 99, border: `1px solid ${isRunning ? "var(--brand-dim)" : "var(--bdr)"}`, background: "rgba(255,255,255,0.03)" }}>
+                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: isRunning ? "var(--brand)" : "var(--tx3)", boxShadow: isRunning ? "0 0 10px var(--brand-glow)" : "none" }} />
+                        <span style={{ fontSize: 11, fontWeight: 800, color: isRunning ? "var(--brand)" : "var(--tx2)", textTransform: 'uppercase', letterSpacing: '0.5px' }}>{isRunning ? "RUNNING" : "STOPPED"}</span>
+                    </div>
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Risk Management */}
-        <Card className="glass-card border-t-4 border-t-destructive">
-          <CardHeader>
-            <div className="flex items-center space-x-2">
-              <ShieldAlert className="w-5 h-5 text-destructive" />
-              <CardTitle>Risk Management</CardTitle>
-            </div>
-            <CardDescription>Capital protection safeguards.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-4">
-              <div className="flex justify-between">
-                <Label>Risk per Trade</Label>
-                <span className="text-sm font-mono text-muted-foreground">{riskPct}%</span>
-              </div>
-              <Slider value={[riskPct]} onValueChange={([v]) => setRiskPct(v ?? 1.5)} max={5} step={0.1} className="[&>.relative>.absolute]:bg-primary" />
             </div>
 
-            <div className="space-y-4">
-              <div className="flex justify-between">
-                <Label>Max Daily Loss</Label>
-                <span className="text-sm font-mono text-muted-foreground">{maxDailyLossPct}%</span>
-              </div>
-              <Slider value={[maxDailyLossPct]} onValueChange={([v]) => setMaxDailyLossPct(v ?? 5)} max={10} step={0.5} className="[&>.relative>.absolute]:bg-destructive" />
-            </div>
+            <div className="page">
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+                    {/* Strategy */}
+                    <div className="card">
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+                            <div style={{ width: 32, height: 32, borderRadius: 9, background: "var(--indigo-dim)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--indigo)" }}><Cpu size={15} /></div>
+                            <div><div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>Strategy</div><div style={{ fontSize: 10, color: "var(--tx3)" }}>AI Brain Config</div></div>
+                        </div>
+                        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--bdr)", borderRadius: 10, padding: "16px", marginBottom: 16 }}>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--tx1)", marginBottom: 8 }}>{model.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--tx2)", lineHeight: 1.6, marginBottom: 14 }}>{model.desc}</div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <span className="bd ip" style={{ fontSize: 9 }}>Lev {model.leverage}x</span>
+                                <span className="bd c" style={{ fontSize: 9 }}>{model.rr}</span>
+                                <span className="bd p" style={{ fontSize: 9 }}>{model.type}</span>
+                            </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <div className="form-group">
+                                <label className="form-label">Symbol</label>
+                                <select className={inputCls} value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+                                    {["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"].map((s) => <option key={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">Timeframe</label>
+                                <select className={inputCls} value={resolution} onChange={(e) => setResolution(e.target.value)}>
+                                    {["1m", "3m", "5m", "15m", "30m", "1h"].map((s) => <option key={s}>{s}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
 
-            <div className="space-y-4">
-              <div className="flex justify-between">
-                <Label>Leverage</Label>
-                <span className="text-sm font-mono text-muted-foreground">
-                  {ALL_MODELS.find(m => m.id === selectedModel)?.leverage || 10}x
-                </span>
-              </div>
-              <Slider
-                value={[ALL_MODELS.find(m => m.id === selectedModel)?.leverage || 10]}
-                disabled={true}
-                max={50}
-                step={1}
-              />
-              <p className="text-[10px] text-muted-foreground mt-1 italic text-center">Auto-managed by {ALL_MODELS.find(m => m.id === selectedModel)?.name}</p>
-            </div>
+                    {/* Risk */}
+                    <div className="card">
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+                            <div style={{ width: 32, height: 32, borderRadius: 9, background: "rgba(16,185,129,0.10)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--green)" }}><ShieldAlert size={15} /></div>
+                            <div><div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>Risk Management</div><div style={{ fontSize: 10, color: "var(--tx3)" }}>Position sizing</div></div>
+                        </div>
+                        <div className="form-group" style={{ marginBottom: 16 }}>
+                            <label className="form-label">Risk per Trade — {riskPct.toFixed(1)}% of balance</label>
+                            <input type="range" min={0.5} max={5} step={0.5} value={riskPct}
+                                onChange={(e) => setRiskPct(parseFloat(e.target.value))}
+                                style={{ width: "100%", accentColor: "var(--indigo)" }}
+                            />
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--tx3)", marginTop: 4 }}>
+                                <span>0.5%</span><span>5.0%</span>
+                            </div>
+                        </div>
+                        <div className="form-group" style={{ marginBottom: 16 }}>
+                            <label className="form-label">Max simultaneous positions</label>
+                            <input type="range" min={1} max={5} step={1} value={maxPositions}
+                                onChange={(e) => setMaxPositions(parseInt(e.target.value))}
+                                style={{ width: "100%", accentColor: "var(--indigo)" }}
+                            />
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--tx3)", marginTop: 4 }}>
+                                <span>1</span><span>5</span>
+                            </div>
+                            <div style={{ textAlign: "center", fontSize: 12, fontWeight: 700, color: "var(--indigo)", marginTop: 4 }}>{maxPositions} positions</div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                            <ValBox label="Risk Amount" value={`$${(bal * riskPct / 100).toFixed(2)}`} tone="g" />
+                            <ValBox label="Max Positions" value={String(maxPositions)} tone="p" />
+                        </div>
+                    </div>
+                </div>
 
-            <div className="flex items-center justify-between border rounded-lg p-3 border-border bg-black/20">
-              <div className="space-y-0.5">
-                <Label className="text-base">Auto-Stop</Label>
-                <p className="text-xs text-muted-foreground">Halt on Max Drawdown</p>
-              </div>
-              <Switch checked={true} />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                {/* Controls */}
+                <div className="card">
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 14 }}>Bot Controls</div>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <button className="btn btn-g" onClick={startBot} disabled={isRunning || loading}
+                            style={{ opacity: isRunning ? 0.45 : 1, pointerEvents: isRunning ? "none" : "auto" }}>
+                            <Play size={14} />{loading && !isRunning ? "Starting…" : "Start Bot"}
+                        </button>
+                        <button className="btn btn-r" onClick={stopBot} disabled={!isRunning || loading}
+                            style={{ opacity: !isRunning ? 0.45 : 1, pointerEvents: !isRunning ? "none" : "auto" }}>
+                            <Square size={14} />{loading && isRunning ? "Stopping…" : "Stop Bot"}
+                        </button>
+                        <button className="btn btn-dk" onClick={resetBotState}>
+                            <RotateCcw size={14} />Reset State
+                        </button>
+                        <button className="btn btn-r" onClick={closeAllPositions}
+                            style={{ background: "transparent", border: "1px solid var(--red-dim)", color: "var(--red)", boxShadow: "none" }}>
+                            <Trash2 size={14} />Close All Positions
+                        </button>
+                    </div>
+                </div>
 
-      {/* Control Actions */}
-      <Card className="glass-card bg-secondary/30">
-        <CardFooter className="py-6 flex flex-wrap justify-end gap-4">
-          <Button variant="outline" className="border-border hover:bg-white/5" onClick={saveConfig}>
-            <Settings2 className="w-4 h-4 mr-2" />
-            Save Configuration
-          </Button>
-          <Button variant="outline" className="border-primary/50 hover:bg-primary/10" asChild>
-            <Link href={strategyTesterUrl}>
-              <BarChart3 className="w-4 h-4 mr-2" />
-              Preview in Strategy Tester
-            </Link>
-          </Button>
-          {isRunning ? (
-            <Button
-              variant="destructive"
-              onClick={handleToggle}
-              className="w-40 font-bold tracking-wide shadow-[0_0_20px_rgba(239,68,68,0.3)] hover:shadow-[0_0_30px_rgba(239,68,68,0.5)] transition-all"
-            >
-              <Square className="w-4 h-4 mr-2 fill-current" />
-              STOP BOT
-            </Button>
-          ) : (
-            <Button
-              onClick={handleToggle}
-              className="w-40 bg-profit hover:bg-profit/90 text-white font-bold tracking-wide shadow-[0_0_20px_rgba(34,197,94,0.3)] hover:shadow-[0_0_30px_rgba(34,197,94,0.5)] transition-all"
-            >
-              <Play className="w-4 h-4 mr-2 fill-current" />
-              START BOT
-            </Button>
-          )}
-        </CardFooter>
-      </Card>
-    </div>
-  );
+                {/* Status */}
+                {botStatus && (
+                    <div className="card">
+                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 14 }}>Live Status</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+                            <ValBox label="Active Monitors" value={String(botStatus?.activeMonitors ?? 0)} tone="p" />
+                            <ValBox label="Trade Count" value={String(botStatus?.tradeCount ?? 0)} tone="g" />
+                            <ValBox label="Open Positions" value={String(botStatus?.openPositions ?? 0)} tone="p" />
+                            <ValBox label="Daily PNL" value={`${botStatus?.dailyPnl >= 0 ? "+" : ""}$${(botStatus?.dailyPnl ?? 0).toFixed(2)}`} tone={botStatus?.dailyPnl >= 0 ? "g" : "r"} />
+                        </div>
+                    </div>
+                )}
+
+                {/* Risk Warning */}
+                <div className="card r" style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <AlertTriangle size={18} style={{ color: "var(--red)", flexShrink: 0, marginTop: 2 }} />
+                    <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)", marginBottom: 4 }}>Risk Disclaimer</div>
+                        <div style={{ fontSize: 12, color: "var(--tx2)", lineHeight: 1.7 }}>
+                            Algorithmic trading involves significant risk. Past performance does not guarantee future results.
+                            Only trade with funds you can afford to lose. Always monitor your positions and set appropriate stop losses.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+function ValBox({ label, value, tone }: { label: string; value: string; tone?: "g" | "r" | "p" }) {
+    const vc = tone === "g" ? "var(--green)" : tone === "r" ? "var(--red)" : tone === "p" ? "var(--brand)" : "var(--tx1)";
+    return (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--bdr)", borderRadius: 8, padding: "10px 14px" }}>
+            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".8px", color: "var(--tx3)", marginBottom: 6 }}>{label}</div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 14, fontWeight: 800, color: vc }}>{value}</div>
+        </div>
+    );
 }

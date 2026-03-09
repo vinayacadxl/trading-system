@@ -12,15 +12,15 @@ export default defineConfig({
     tailwindcss(),
     metaImagesPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
+      process.env.REPL_ID !== undefined
       ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-          await import("@replit/vite-plugin-dev-banner").then((m) =>
-            m.devBanner(),
-          ),
-        ]
+        await import("@replit/vite-plugin-cartographer").then((m) =>
+          m.cartographer(),
+        ),
+        await import("@replit/vite-plugin-dev-banner").then((m) =>
+          m.devBanner(),
+        ),
+      ]
       : []),
   ],
   resolve: {
@@ -47,16 +47,21 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
-    // When using npm run dev:client (Vite only), proxy /api and /socket.io to Express.
-    proxy: {
+    // Proxy /api and /socket.io to Express (server default port 5001)
+    // ONLY active when running standalone (e.g. npm run dev:client on :5173)
+    proxy: process.env.VITE_DEV_SERVER_PORT ? {} : {
       "/api": {
-        target: "http://127.0.0.1:5000",
+        target: "http://127.0.0.1:5001",
         changeOrigin: true,
+        timeout: 60000,
+        proxyTimeout: 60000,
       },
       "/socket.io": {
-        target: "http://127.0.0.1:5000",
+        target: "http://127.0.0.1:5001",
         changeOrigin: true,
         ws: true,
+        timeout: 60000,
+        proxyTimeout: 60000,
       },
     },
   },

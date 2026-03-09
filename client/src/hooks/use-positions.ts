@@ -6,6 +6,8 @@ export interface DeltaPosition {
   size: number;
   entry_price: string;
   mark_price: string;
+  unrealized_pnl?: string | number;
+  entry_time?: number;
   liquidation_price?: string;
   margin?: string;
   [key: string]: unknown;
@@ -43,13 +45,18 @@ export function usePositions(refreshIntervalMs = 60_000) {
       if (errMsg) setError(errMsg);
       const list = (json.positions as DeltaPosition[]) ?? [];
       setPositions(list);
-      // Unrealized PnL: (mark_price - entry_price) * size (size sign: long +, short -)
+      // Unrealized PnL: Use API value to avoid contract_value calculation errors
       let pnl = 0;
       for (const p of list) {
-        const entry = parseFloat(p.entry_price) || 0;
-        const mark = parseFloat(p.mark_price) || 0;
-        const size = Number(p.size) || 0;
-        pnl += (mark - entry) * size;
+        if (p.unrealized_pnl != null) {
+          pnl += parseFloat(String(p.unrealized_pnl)) || 0;
+        } else {
+          // Fallback only if API doesn't provide it
+          const entry = parseFloat(p.entry_price) || 0;
+          const mark = parseFloat(p.mark_price) || 0;
+          const size = Number(p.size) || 0;
+          pnl += (mark - entry) * size;
+        }
       }
       setUnrealizedPnl(pnl);
     } catch (e) {

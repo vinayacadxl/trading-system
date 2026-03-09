@@ -7,3 +7,9 @@ vite.config.ts.*
 .env
 .env.local
 .env.*.local
+debug-logs/
+delta_debug.log
+market_state.json
+bot-state.json
+.local/
+.cursor/

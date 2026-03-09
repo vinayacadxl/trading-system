@@ -11,6 +11,8 @@ export interface PortfolioData {
   portfolioValue: string;
   currency: string;
   balances: PortfolioBalance[];
+  /** true when real API balance is unavailable — shows fallback from .env */
+  isFallback?: boolean;
   /** Max position size (5% of balance) for bot – balance-based sizing */
   suggestedMaxPositionUsd?: string;
   /** Daily ROI % vs balance ~24h ago; null until we have 24h of history */
@@ -33,38 +35,61 @@ export function usePortfolio(refreshIntervalMs = 60_000) {
       try {
         json = JSON.parse(text);
       } catch {
-        setError("Backend not running. See steps below.");
+        setError("Backend not running.");
         setData(null);
         setLoading(false);
         return;
       }
-      // Process API response
 
-      const errorMessage = (json?.errorMessage as string | undefined) ?? (json?.success === false && json?.error != null
-        ? (json.error as { message?: string; code?: string }).message ?? (json.error as { message?: string; code?: string }).code
-        : undefined);
+      const errorMessage =
+        (json?.errorMessage as string | undefined) ??
+        (json?.success === false && json?.error != null
+          ? (json.error as { message?: string; code?: string }).message ??
+          (json.error as { message?: string; code?: string }).code
+          : undefined);
+
       if (errorMessage) {
         setError(errorMessage);
-        setData({ portfolioValue: "0.00", currency: "USD", balances: [] });
+        setData({ portfolioValue: "0.00", currency: "USD", balances: [], isFallback: true });
         setLoading(false);
         return;
       }
+
       if (!res.ok) {
         const err = json?.error as { message?: string; code?: string } | undefined;
         const msg = err?.message || (err?.code ? String(err.code) : "Failed to fetch balance");
         setError(msg);
-        setData({ portfolioValue: "0.00", currency: "USD", balances: [] });
+        setData({ portfolioValue: "0.00", currency: "USD", balances: [], isFallback: true });
         setLoading(false);
         return;
       }
-      if ((json as { success?: boolean }).success && (json as { portfolioValue?: string }).portfolioValue != null) {
-        const j = json as { portfolioValue: string; currency?: string; balances?: PortfolioBalance[]; suggestedMaxPositionUsd?: string; dailyRoiPct?: number | null; balance24hAgo?: string | null };
+
+      if (
+        (json as { success?: boolean }).success &&
+        (json as { portfolioValue?: string }).portfolioValue != null
+      ) {
+        const j = json as {
+          portfolioValue: string;
+          currency?: string;
+          balances?: PortfolioBalance[];
+          isFallback?: boolean;
+          suggestedMaxPositionUsd?: string;
+          dailyRoiPct?: number | null;
+          balance24hAgo?: string | null;
+        };
+
         let pv = j.portfolioValue;
         let suggested = j.suggestedMaxPositionUsd;
-        // Fallback: agar backend 0 bheje but balances mein USD non-zero hai to client pe compute karo
+        const isFallback = j.isFallback ?? false;
         const balances = j.balances || [];
+
+        // Client-side fallback: if backend sent 0 but balances array has USD entry
         if (pv === "0.00" && balances.length > 0) {
-          const usd = balances.find((b: Record<string, unknown>) => Number(b.asset_id) === 14 || String(b.asset_symbol || "").toUpperCase() === "USD");
+          const usd = balances.find(
+            (b: Record<string, unknown>) =>
+              Number(b.asset_id) === 14 ||
+              String(b.asset_symbol || "").toUpperCase() === "USD"
+          );
           if (usd) {
             const bal = parseFloat(String(usd.balance ?? usd.available_balance ?? 0)) || 0;
             if (bal > 0) {
@@ -73,10 +98,12 @@ export function usePortfolio(refreshIntervalMs = 60_000) {
             }
           }
         }
+
         setData({
           portfolioValue: pv,
           currency: j.currency || "USD",
           balances,
+          isFallback,
           suggestedMaxPositionUsd: suggested,
           dailyRoiPct: j.dailyRoiPct ?? null,
           balance24hAgo: j.balance24hAgo ?? null,

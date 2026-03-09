@@ -1,465 +1,467 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CandlestickChart } from "@/components/CandlestickChart";
-import { Activity, DollarSign, Wallet, Maximize2, X } from "lucide-react";
-import { useState, useRef, useLayoutEffect, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { usePortfolio } from "@/hooks/use-portfolio";
 import { usePositions } from "@/hooks/use-positions";
 import { useLiveDelta } from "@/hooks/use-live-delta";
+import { useEngineStatus } from "@/hooks/use-engine-status";
+import { CandlestickChart, type CandleInput } from "@/components/CandlestickChart";
+import { Wifi, WifiOff, Activity, BarChart3, Target, Cpu, Zap, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 
-const CHART_TIMEFRAMES = [
-  { label: "1m", value: "1m" },
-  { label: "3m", value: "3m" },
-  { label: "5m", value: "5m" },
-  { label: "15m", value: "15m" },
-  { label: "30m", value: "30m" },
-  { label: "1h", value: "1h" },
-  { label: "2h", value: "2h" },
-  { label: "4h", value: "4h" },
-  { label: "1d", value: "1d" },
-];
 
+const fmt = (n: number, d = 2) =>
+    n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const ago = (ts: number) => {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    return `${Math.floor(s / 3600)}h`;
+};
+
+function useSignals() {
+    const [sigs, setSigs] = useState<any[]>([]);
+    useEffect(() => {
+        const load = () =>
+            fetch("/api/bot/signals")
+                .then((r) => r.json())
+                .then((d) => { if (Array.isArray(d)) setSigs(d.slice(0, 8)); })
+                .catch(() => { });
+        load();
+        const t = setInterval(load, 5000);
+        return () => clearInterval(t);
+    }, []);
+    return sigs;
+}
+
+function useCandles(sym: string, tf: string) {
+    const [c, setC] = useState<CandleInput[]>([]);
+    useEffect(() => {
+        fetch(`/api/delta/candles?symbol=${sym}&resolution=${tf}&count=200`)
+            .then((r) => r.json())
+            .then((d) => { if (Array.isArray(d)) setC(d); })
+            .catch(() => { });
+    }, [sym, tf]);
+    return c;
+}
+
+type Tone = "g" | "r" | "p" | "a" | undefined;
+
+function StatCard({
+    label, value, sub, tone, Icon,
+}: {
+    label: string; value: string; sub?: string; tone?: Tone; Icon: React.ElementType;
+}) {
+    const ic =
+        tone === "g" ? "var(--green)" :
+            tone === "r" ? "var(--red)" :
+                tone === "p" ? "var(--brand)" :
+                    tone === "a" ? "var(--amber)" :
+                        "var(--tx2)";
+
+    return (
+        <div className="card" style={{ padding: '20px' }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <span style={{
+                    width: 32, height: 32, borderRadius: 8,
+                    background: "rgba(255,255,255,0.03)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    color: ic,
+                    border: '1px solid var(--bdr)',
+                }}>
+                    <Icon size={14} />
+                </span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx2)", textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", letterSpacing: '-0.5px' }}>{value}</div>
+            {sub && <div style={{ fontSize: 11, color: "var(--tx3)", marginTop: 4 }}>{sub}</div>}
+        </div>
+    );
+}
+
+function ECell({ lbl, val, t }: { lbl: string; val: string; t?: "g" | "r" | "a" | "p" }) {
+    return (
+        <div className="eng-cell">
+            <div className="eng-cell-lbl">{lbl}</div>
+            <div className={`eng-cell-val${t ? " " + t : ""}`}>{val ?? "—"}</div>
+        </div>
+    );
+}
 
 export default function Dashboard() {
-  const [chartSymbol, setChartSymbol] = useState("BTCUSD");
-  const [chartResolution, setChartResolution] = useState("15m");
-  const [chartCandles, setChartCandles] = useState<{ time: number; open: string; high: string; low: string; close: string; volume?: string }[]>([]);
-  const [chartLivePrice, setChartLivePrice] = useState<number | null>(null);
-  const [chartFullscreen, setChartFullscreen] = useState(false);
-  const [fullscreenChartHeight, setFullscreenChartHeight] = useState(600);
-  const [botRunning, setBotRunning] = useState(false);
-  const [botRegime, setBotRegime] = useState<{ regime: string; strategy: string; reason: string } | null>(null);
-  const [activeModel, setActiveModel] = useState<string>("lightning_scalper");
-  const [signalConfidence, setSignalConfidence] = useState(0);
-  const [statusMessage, setStatusMessage] = useState<string>("Initializing...");
-  const fullscreenChartRef = useRef<HTMLDivElement>(null);
+    const { data: port, error: portError } = usePortfolio(15_000);
+    const { positions, unrealizedPnl } = usePositions(8_000);
+    const { tickers, connected } = useLiveDelta();
+    const e = useEngineStatus();
+    const sigs = useSignals();
 
-  useLayoutEffect(() => {
-    if (!chartFullscreen || !fullscreenChartRef.current) return;
-    const el = fullscreenChartRef.current;
-    const onResize = () => setFullscreenChartHeight(el.getBoundingClientRect().height);
-    onResize();
-    const ro = new ResizeObserver(onResize);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [chartFullscreen]);
+    const [sym, setSym] = useState("BTCUSD");
+    const [tf, setTf] = useState("15m");
+    const candles = useCandles(sym, tf);
 
-  useEffect(() => {
-    const fetchStatus = () => {
-      fetch("/api/bot/status")
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            if (data.config?.symbol) setChartSymbol(data.config.symbol);
-            setBotRunning(!!data.running);
-            setBotRegime(data.currentRegime || null);
-            setSignalConfidence(data.lastSignalConfidence || 0);
-            setStatusMessage(data.lastExecutionMessage || "Scanning...");
-            if (data.config?.strategyType === "adaptive") {
-              setActiveModel(data.config.strategyPreset || "pro_sniper_v3");
-            } else {
-              setActiveModel(data.config?.strategyType || "ema_crossover");
-            }
-          }
-        })
-        .catch(() => { });
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    const bal = port ? parseFloat(String(port.portfolioValue ?? "0")) : 0;
+    const isFallback = port?.isFallback ?? false;
 
-  // Candles: sirf initial load + symbol/resolution change pe REST. Live updates direct WebSocket (live-candle) – no REST poll, real-time.
-  useEffect(() => {
-    let cancelled = false;
-    const url = `/api/delta/candles?symbol=${encodeURIComponent(chartSymbol)}&resolution=${encodeURIComponent(chartResolution)}&limit=300&_t=${Date.now()}`;
-    fetch(url, { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled || !data.success || !Array.isArray(data.candles)) return;
-        setChartCandles(data.candles);
-      })
-      .catch(() => { });
-    return () => {
-      cancelled = true;
-    };
-  }, [chartSymbol, chartResolution]);
+    const currentTicker = tickers[sym];
+    const price = currentTicker?.lastPrice ? Number(currentTicker.lastPrice) : null;
+    const score = e.confidence?.score ?? 0;
+    const posArr = positions ?? [];
+    const unPnl = unrealizedPnl ?? 0;
 
-  const { data: portfolio, loading: balanceLoading } = usePortfolio(60_000);
-  const { positions, unrealizedPnl, loading: positionsLoading } = usePositions(60_000);
-  const { liveCandle, liveTicker, connected: liveWsConnected } = useLiveDelta();
-
-  // Ticker: WebSocket primary (real-time). REST sirf jab WS disconnected ho – 1s fallback. Auto-trading ke liye fast data.
-  useEffect(() => {
-    if (liveWsConnected) return; // WebSocket se live aayega – REST poll mat karo
-    let cancelled = false;
-    const fetchTicker = () => {
-      fetch(`/api/delta/ticker?symbol=${encodeURIComponent(chartSymbol)}&_t=${Date.now()}`, { cache: "no-store" })
-        .then((res) => res.json())
-        .then((data) => {
-          if (cancelled || !data.success || data.lastPrice == null) return;
-          const p = Number(data.lastPrice);
-          if (Number.isFinite(p)) setChartLivePrice(p);
-        })
-        .catch(() => { });
-    };
-    fetchTicker();
-    const interval = setInterval(fetchTicker, 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [chartSymbol, liveWsConnected]);
-
-  // Apply live ticker to chart price when symbol matches (Delta socket sends BTCUSDT)
-  useEffect(() => {
-    if (!liveTicker) return;
-    const sym = liveTicker.symbol?.toUpperCase() ?? "";
-    if (chartSymbol !== "BTCUSDT" && chartSymbol !== "BTCUSD") return;
-    if (sym !== "BTCUSDT" && sym !== "BTCUSD") return;
-    const p = Number(liveTicker.lastPrice);
-    if (Number.isFinite(p)) setChartLivePrice(p);
-  }, [liveTicker, chartSymbol]);
-
-  // Merge live 15m candle into chart when symbol and resolution match
-  useEffect(() => {
-    if (!liveCandle || chartResolution !== "15m") return;
-    if (chartSymbol !== "BTCUSDT" && chartSymbol !== "BTCUSD") return;
-    setChartCandles((prev) => {
-      const c = liveCandle;
-      const newCandle = {
-        time: c.time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume ?? "",
-      };
-      const idx = prev.findIndex((x) => x.time === c.time);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = newCandle;
-        return next;
-      }
-      const next = [...prev, newCandle].sort((a, b) => a.time - b.time);
-      return next.slice(-500);
-    });
-  }, [liveCandle, chartSymbol, chartResolution]);
-
-  const balanceDisplay = balanceLoading || !portfolio
-    ? "—"
-    : `$${Number(portfolio.portfolioValue).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const pnlDisplay = positionsLoading
-    ? "—"
-    : `${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`;
-  const openCount = positions.length;
-
-  return (
-    <div className="space-y-6 max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-
-      {/* Top Stats Row – all from actual account */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="glass-card border-l-4 border-l-primary">
-          <CardContent className="p-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">Balance</p>
-                <h3 className="text-2xl font-mono font-bold text-white mt-1">{balanceDisplay}</h3>
-              </div>
-              <Wallet className="w-5 h-5 text-primary/50" />
-            </div>
-            <div className="flex items-center mt-2 text-muted-foreground text-xs font-mono flex-wrap gap-y-1">
-              From Delta Exchange
-              {portfolio?.suggestedMaxPositionUsd && Number(portfolio.suggestedMaxPositionUsd) > 0 && (
-                <span className="block w-full text-primary/80">Bot: max ~${Number(portfolio.suggestedMaxPositionUsd).toFixed(2)} per trade (5% of balance)</span>
-              )}
-              {balanceDisplay === "$0.00" && portfolio && (
-                <span className="block mt-1 text-amber-500/90">Check API keys in Settings.</span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-card border-l-4 border-l-green-500">
-          <CardContent className="p-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">Unrealized PNL</p>
-                <h3 className={`text-2xl font-mono font-bold mt-1 ${unrealizedPnl >= 0 ? "text-profit" : "text-loss"}`}>
-                  {pnlDisplay}
-                </h3>
-              </div>
-              <Activity className="w-5 h-5 text-green-500/50" />
-            </div>
-            <div className="flex items-center mt-2 text-muted-foreground text-xs font-mono">
-              <span className="mr-1">Open Positions:</span> {openCount}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={`glass-card border-l-4 ${botRunning ? "border-l-profit shadow-[0_0_15px_rgba(34,197,94,0.1)]" : "border-l-muted"}`}>
-          <CardContent className="p-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">Bot Status</p>
-                <h3 className={`text-2xl font-mono font-bold mt-1 ${botRunning ? "text-profit" : "text-muted-foreground"}`}>
-                  {botRunning ? "Running" : "Stopped"}
-                </h3>
-              </div>
-              <div className={`w-3 h-3 rounded-full mt-1 ${botRunning ? "bg-profit animate-pulse" : "bg-muted"}`} />
-            </div>
-            <div className="flex flex-col mt-2 space-y-2">
-              {botRunning ? (
-                <>
-                  <div className="flex justify-between items-center text-[10px] font-mono leading-relaxed">
-                    <span className="text-primary font-bold uppercase tracking-tight">{activeModel.replace(/_/g, ' ')}</span>
-                    <span className="text-muted-foreground truncate ml-2">{botRegime ? botRegime.regime : 'Scanning...'}</span>
-                  </div>
-                  <div className="text-[9px] text-muted-foreground italic truncate">
-                    {statusMessage}
-                  </div>
-                  {signalConfidence > 0 && (
-                    <div className="space-y-1 animate-in fade-in slide-in-from-left-2 duration-500">
-                      <div className="flex justify-between text-[10px] uppercase font-bold tracking-tighter">
-                        <span className="text-muted-foreground">Signal Strength</span>
-                        <span className={signalConfidence > 75 ? "text-profit" : signalConfidence > 40 ? "text-amber-500" : "text-loss"}>
-                          {signalConfidence}%
-                        </span>
-                      </div>
-                      <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full transition-all duration-1000 ${signalConfidence > 75 ? "bg-profit" : signalConfidence > 40 ? "bg-amber-500" : "bg-loss"}`}
-                          style={{ width: `${signalConfidence}%` }}
-                        />
-                      </div>
+    return (
+        <>
+            {/* ── Topbar ───────────────────────────────── */}
+            <div className="topbar">
+                <div>
+                    <div className="topbar-title">Dashboard</div>
+                    <div className="topbar-sub">Real-time trading overview</div>
+                </div>
+                <div className="topbar-right">
+                    {tickers["BTCUSD"] && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", letterSpacing: 1 }}>BTC</span>
+                            <span style={{ fontFamily: "var(--mono)", fontSize: 16, fontWeight: 700, color: "var(--tx1)" }}>
+                                ${fmt(Number(tickers["BTCUSD"].lastPrice))}
+                            </span>
+                        </div>
+                    )}
+                    <div title={isFallback ? "⚠️ Estimated balance — whitelist IP on Delta Exchange" : "Live account balance"}
+                        className="price-pill"
+                        style={{
+                            background: "rgba(255,255,255,0.03)",
+                            border: `1px solid var(--bdr)`,
+                            color: isFallback ? "var(--amber)" : "var(--green)",
+                            cursor: "help",
+                        }}>
+                        {isFallback && <AlertTriangle size={11} />}
+                        {isFallback ? "~" : ""}{fmt(bal)}
                     </div>
-                  )}
-                </>
-              ) : (
-                <span className="text-muted-foreground text-[10px] font-mono capitalize">Configure in Bot Control</span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
 
-        <Card className="glass-card border-l-4 border-l-purple-500">
-          <CardContent className="p-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">Daily ROI</p>
-                <h3 className={`text-2xl font-mono font-bold mt-1 ${portfolio?.dailyRoiPct != null ? (portfolio.dailyRoiPct >= 0 ? "text-profit" : "text-loss") : "text-muted-foreground"}`}>
-                  {portfolio?.dailyRoiPct != null
-                    ? `${portfolio.dailyRoiPct >= 0 ? "+" : ""}${portfolio.dailyRoiPct.toFixed(2)}%`
-                    : "—"}
-                </h3>
-              </div>
-              <DollarSign className="w-5 h-5 text-purple-500/50" />
-            </div>
-            <div className="flex items-center mt-2 text-xs font-mono text-muted-foreground">
-              {portfolio?.dailyRoiPct != null
-                ? "Based on balance 24h ago"
-                : "Collecting balance history (~24h needed)"}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main Chart Section – Delta-style: OHLC strip + live candlestick */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="glass-card lg:col-span-2 flex flex-col overflow-hidden">
-          <CardHeader className="border-b border-border pb-2 flex flex-row items-center justify-between flex-shrink-0 flex-wrap gap-2">
-            <div>
-              <CardTitle className="text-lg font-bold text-white flex items-center gap-2">
-                Live Chart (Delta)
-                {liveWsConnected && (chartSymbol === "BTCUSDT" || chartSymbol === "BTCUSD") && (
-                  <Badge variant="outline" className="text-[10px] border-green-500/60 text-green-400 bg-green-500/10">
-                    Live
-                  </Badge>
-                )}
-              </CardTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">{chartSymbol} · Real-time OHLC from Delta Exchange</p>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              {chartLivePrice != null && Number.isFinite(chartLivePrice) && (
-                <span className="font-mono text-base font-bold text-white">
-                  ${chartLivePrice.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-                </span>
-              )}
-              <span className="text-[10px] text-muted-foreground uppercase font-semibold">Timeframe</span>
-              <Select value={chartResolution} onValueChange={setChartResolution}>
-                <SelectTrigger className="w-[80px] h-8 text-xs font-mono border-border bg-secondary/30 text-foreground">
-                  <SelectValue placeholder="15m" />
-                </SelectTrigger>
-                <SelectContent>
-                  {CHART_TIMEFRAMES.map((tf) => (
-                    <SelectItem key={tf.value} value={tf.value} className="text-xs font-mono">
-                      {tf.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <button
-                type="button"
-                onClick={() => setChartFullscreen(true)}
-                className="p-2 rounded-md border border-border bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-colors"
-                title="Full screen"
-              >
-                <Maximize2 className="w-4 h-4" />
-              </button>
-            </div>
-          </CardHeader>
-          {/* OHLC strip – real Delta style above chart */}
-          {chartCandles.length > 0 && (
-            <div className="px-3 py-1.5 border-b border-border/50 bg-black/20 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono">
-              {(() => {
-                const last = chartCandles[chartCandles.length - 1]!;
-                const o = parseFloat(last.open);
-                const h = parseFloat(last.high);
-                const l = parseFloat(last.low);
-                const c = chartLivePrice != null && Number.isFinite(chartLivePrice) ? chartLivePrice : parseFloat(last.close);
-                const liveH = chartLivePrice != null ? Math.max(h, chartLivePrice) : h;
-                const liveL = chartLivePrice != null ? Math.min(l, chartLivePrice) : l;
-                const change = c - o;
-                const changePct = o !== 0 ? (change / o) * 100 : 0;
-                const up = change >= 0;
-                return (
-                  <>
-                    <span className="text-muted-foreground">O <span className="text-white">{o.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                    <span className="text-muted-foreground">H <span className="text-white">{liveH.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                    <span className="text-muted-foreground">L <span className="text-white">{liveL.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                    <span className="text-muted-foreground">C <span className="text-white">{c.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                    <span className={up ? "text-green-500" : "text-red-500"}>
-                      {up ? "+" : ""}{change.toFixed(1)} ({up ? "+" : ""}{changePct.toFixed(2)}%)
+                    <span style={{
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        width: 34, height: 34, borderRadius: 10,
+                        background: "rgba(255,255,255,0.03)",
+                        border: `1px solid var(--bdr)`,
+                        color: connected ? "var(--green)" : "var(--red)",
+                    }}>
+                        {connected ? <Wifi size={15} /> : <WifiOff size={15} />}
                     </span>
-                  </>
-                );
-              })()}
-            </div>
-          )}
-          <CardContent className="p-0 flex-1 flex flex-col min-h-0">
-            {!chartFullscreen && (
-              <div
-                className="w-full overflow-hidden rounded-b-lg border-t border-border"
-                style={{ width: "100%", height: 520, minHeight: 520 }}
-              >
-                <CandlestickChart candles={chartCandles} height={520} className="w-full min-w-0" currentPrice={chartLivePrice} resolution={chartResolution} />
-              </div>
-            )}
-            {chartFullscreen && (
-              <div className="flex items-center justify-center rounded-b-lg bg-muted/30" style={{ height: 520 }}>
-                <p className="text-muted-foreground text-sm">Chart is in full screen. Click X there to close.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Fullscreen chart overlay – Delta candlestick when open */}
-        {chartFullscreen && (
-          <div className="fixed inset-0 z-[100] flex flex-col bg-background">
-            <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-border bg-card flex-wrap gap-2">
-              <span className="font-semibold text-white">Live Chart (Delta) — {chartSymbol} · {chartResolution}</span>
-              {chartLivePrice != null && Number.isFinite(chartLivePrice) && (
-                <span className="font-mono font-bold text-white">
-                  ${chartLivePrice.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setChartFullscreen(false)}
-                className="p-2 rounded-md border border-border hover:bg-destructive/20 hover:text-destructive transition-colors"
-                title="Close full screen"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            {chartCandles.length > 0 && (
-              <div className="flex-shrink-0 px-4 py-1.5 border-b border-border/50 bg-black/20 flex flex-wrap items-center gap-x-4 text-xs font-mono">
-                {(() => {
-                  const last = chartCandles[chartCandles.length - 1]!;
-                  const o = parseFloat(last.open);
-                  const h = parseFloat(last.high);
-                  const l = parseFloat(last.low);
-                  const c = chartLivePrice != null && Number.isFinite(chartLivePrice) ? chartLivePrice : parseFloat(last.close);
-                  const liveH = chartLivePrice != null ? Math.max(h, chartLivePrice) : h;
-                  const liveL = chartLivePrice != null ? Math.min(l, chartLivePrice) : l;
-                  const change = c - o;
-                  const changePct = o !== 0 ? (change / o) * 100 : 0;
-                  const up = change >= 0;
-                  return (
-                    <>
-                      <span className="text-muted-foreground">O <span className="text-white">{o.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                      <span className="text-muted-foreground">H <span className="text-white">{liveH.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                      <span className="text-muted-foreground">L <span className="text-white">{liveL.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                      <span className="text-muted-foreground">C <span className="text-white">{c.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span></span>
-                      <span className={up ? "text-green-500" : "text-red-500"}>{up ? "+" : ""}{change.toFixed(1)} ({up ? "+" : ""}{changePct.toFixed(2)}%)</span>
-                    </>
-                  );
-                })()}
-              </div>
-            )}
-            <div
-              ref={fullscreenChartRef}
-              className="w-full flex-1 min-h-0 p-2"
-              style={{ minHeight: 400, height: "calc(100vh - 52px)" }}
-            >
-              <CandlestickChart candles={chartCandles} height={fullscreenChartHeight} className="w-full min-w-0 rounded border border-border" currentPrice={chartLivePrice} resolution={chartResolution} />
-            </div>
-          </div>
-        )}
-
-        {/* Active Positions – from Delta account */}
-        <div className="space-y-6">
-          <Card className="glass-card h-full flex flex-col">
-            <CardHeader className="border-b border-border py-3">
-              <CardTitle className="text-sm font-medium">Active Positions</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 flex-1">
-              {positionsLoading && positions.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground text-sm py-8">
-                  Loading…
                 </div>
-              ) : positions.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground text-sm py-8">
-                  No active positions
-                </div>
-              ) : (
-                positions.map((pos) => {
-                  const entry = parseFloat(pos.entry_price) || 0;
-                  const mark = parseFloat(pos.mark_price) || 0;
-                  const size = Number(pos.size) || 0;
-                  const pnl = (mark - entry) * size;
-                  const notional = entry * Math.abs(size) || 1;
-                  const pnlPercent = (pnl / notional) * 100;
-                  const side = size >= 0 ? "LONG" : "SHORT";
-                  return (
-                    <div key={`${pos.product_id}-${pos.symbol}`} className="p-4 border-b border-border last:border-0 hover:bg-white/5 transition-colors group">
-                      <div className="flex justify-between mb-2">
-                        <span className="font-bold text-white flex items-center">
-                          {pos.symbol}
-                          <Badge variant="outline" className={`ml-2 text-[10px] h-4 ${side === "LONG" ? "border-profit text-profit" : "border-loss text-loss"}`}>
-                            {side}
-                          </Badge>
-                        </span>
-                        <span className={`font-mono font-bold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                          {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)} USDT
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground font-mono">
-                        <div>Entry: <span className="text-white">{pos.entry_price}</span></div>
-                        <div className="text-right">Mark: <span className="text-white">{pos.mark_price}</span></div>
-                        <div>Size: <span className="text-white">{Math.abs(size)}</span></div>
-                        <div className="text-right">ROE: <span className={pnlPercent >= 0 ? "text-profit" : "text-loss"}>{pnlPercent.toFixed(2)}%</span></div>
-                      </div>
+            </div>
+
+            {/* IP Whitelisting Error Alert */}
+            {portError && (portError.includes("ip_not_whitelisted") || portError.includes("whitelist")) && (
+                <div style={{ margin: "0 24px 16px", padding: "12px 20px", background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.28)", borderRadius: 12, display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--red)", boxShadow: "0 0 6px var(--red-glow)" }} />
+                    <div style={{ flex: 1, fontSize: 13, color: "var(--red)", fontWeight: 500 }}>
+                        IP Not Whitelisted: Please add your IP to Delta API settings.
                     </div>
-                  );
-                })
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+                    <button
+                        onClick={() => fetch("/api/debug/setup-status").then(r => r.json()).then(d => {
+                            if (d.serverIp) {
+                                navigator.clipboard.writeText(d.serverIp);
+                                alert(`IP Copied: ${d.serverIp}`);
+                            }
+                        })}
+                        className="btn btn-dk" style={{ padding: "4px 12px", fontSize: 11 }}>Copy IP</button>
+                </div>
+            )}
 
-    </div>
-  );
+            {/* ── Page ─────────────────────────────────── */}
+            <div className="page">
+                {/* Stats row */}
+                <div className="stats-grid">
+                    <StatCard label="Portfolio Balance" value={`${isFallback ? "~" : ""}$${fmt(bal)}`}
+                        sub={isFallback ? "⚠️ Estimated — IP not whitelisted" : "Live USDT Balance"}
+                        tone={isFallback ? "a" : bal > 0 ? "g" : undefined} Icon={isFallback ? AlertTriangle : BarChart3} />
+
+                    <StatCard label="Unrealised PNL" value={`${unPnl >= 0 ? "+" : ""}$${fmt(unPnl)}`}
+                        sub={`${posArr.length} open position${posArr.length !== 1 ? "s" : ""}`}
+                        tone={unPnl >= 0 ? "g" : "r"} Icon={unPnl >= 0 ? TrendingUp : TrendingDown} />
+                    <StatCard label="Bot Status" value={(e as any).wsConnected ? "LIVE" : "OFFLINE"}
+                        sub={(e as any).wsConnected ? "Scanning markets" : "No connection"}
+                        tone={(e as any).wsConnected ? "g" : "r"} Icon={Cpu} />
+                    <StatCard label="AI Confidence" value={`${Math.round(score * 100)}%`}
+                        sub="Signal quality"
+                        tone={score >= 0.65 ? "g" : score >= 0.4 ? "p" : "r"} Icon={Target} />
+                </div>
+
+                {/* Chart + Side panel */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
+                    {/* Chart */}
+                    <div className="chart-box">
+                        <div className="chart-hd">
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <span style={{ fontWeight: 800, fontSize: 15, color: "var(--tx1)", letterSpacing: "-.3px" }}>{sym}</span>
+                                {price && <span style={{ fontFamily: "var(--mono)", fontSize: 20, fontWeight: 700, color: "var(--tx1)" }}>${fmt(price)}</span>}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <select value={sym} onChange={(ev) => setSym(ev.target.value)}
+                                    style={{ background: "transparent", border: "1px solid var(--bdr)", borderRadius: 8, padding: "5px 12px", fontSize: 12, color: "var(--tx1)", cursor: "pointer", outline: "none" }}>
+                                    {["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BCHUSD", "LTCUSD", "LINKUSD"].map((s) => <option key={s} style={{ background: '#000' }}>{s}</option>)}
+                                </select>
+                                <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: 3, border: "1px solid var(--bdr)" }}>
+                                    {["5m", "15m", "1h"].map((t) => (
+                                        <button key={t} onClick={() => setTf(t)} style={{
+                                            padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                                            border: 'none',
+                                            background: tf === t ? "var(--brand-dim)" : "transparent",
+                                            color: tf === t ? "var(--brand)" : "var(--tx2)",
+                                            transition: "all .2s",
+                                        }}>{t}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ height: 350 }}>
+                            <CandlestickChart candles={candles} currentPrice={price ?? undefined} resolution={tf} height={350} />
+                        </div>
+                    </div>
+
+                    {/* Positions + Signals column */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                        {/* Open Positions */}
+                        <div className="card" style={{ flex: 1, padding: 0, overflow: "hidden" }}>
+                            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--bdr)", display: "flex", alignItems: "center", gap: 8 }}>
+                                <div className="sec-title">Open Positions</div>
+                                {posArr.length > 0 && (
+                                    <span className="bd p" style={{ marginLeft: "auto" }}>{posArr.length}</span>
+                                )}
+                            </div>
+                            <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8, maxHeight: 210, overflowY: "auto" }}>
+                                {posArr.length === 0 ? (
+                                    <div className="empty-state" style={{ padding: "26px 0" }}>
+                                        <BarChart3 size={28} />
+                                        <span>No open positions</span>
+                                    </div>
+                                ) : posArr.map((p: any, i: number) => {
+                                    const pnl = parseFloat(String(p.unrealized_pnl ?? 0)) || 0;
+                                    return (
+                                        <div key={i} className="pos-card">
+                                            <div className={`pos-badge ${p.size > 0 ? "long" : "short"}`}>
+                                                {p.size > 0 ? "LONG" : "SHORT"}
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>{p.symbol}</div>
+                                                <div style={{ fontSize: 11, color: "var(--tx2)", marginTop: 2 }}>
+                                                    {Math.abs(p.size)} @ ${fmt(parseFloat(p.entry_price ?? "0"))}
+                                                </div>
+                                            </div>
+                                            <div style={{ textAlign: "right" }}>
+                                                <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: pnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                                    {pnl >= 0 ? "+" : ""}${fmt(pnl)}
+                                                </div>
+                                                <div style={{ fontSize: 10, color: "var(--tx3)", marginTop: 2 }}>PNL</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Signals */}
+                        <div className="card" style={{ flex: 1, padding: 0, overflow: "hidden" }}>
+                            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--bdr)", display: "flex", alignItems: "center", gap: 8 }}>
+                                <div className="sec-title">Signal History</div>
+                                {sigs.length > 0 && (
+                                    <span className="bd c" style={{ marginLeft: "auto" }}>{sigs.length}</span>
+                                )}
+                            </div>
+                            <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6, maxHeight: 210, overflowY: "auto" }}>
+                                {sigs.length === 0 ? (
+                                    <div className="empty-state" style={{ padding: "26px 0" }}>
+                                        <Activity size={28} />
+                                        <span>No signals yet</span>
+                                    </div>
+                                ) : sigs.map((s: any) => (
+                                    <div key={s.id} style={{
+                                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                                        padding: "8px 10px", borderRadius: 9,
+                                        background: s.action === "executed"
+                                            ? "rgba(74,222,128,0.08)"
+                                            : "rgba(0,0,0,0.20)",
+                                        border: `1px solid ${s.action === "executed" ? "rgba(74,222,128,0.18)" : "var(--bdr)"}`,
+                                        transition: "all .15s",
+                                    }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                            <span style={{
+                                                width: 6, height: 6, borderRadius: "50%",
+                                                background: s.signal === "buy" ? "var(--green)" : "var(--red)",
+                                                boxShadow: `0 0 6px ${s.signal === "buy" ? "var(--green-glow)" : "var(--red-glow)"}`,
+                                                flexShrink: 0,
+                                            }} />
+                                            <span style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, color: s.signal === "buy" ? "var(--green)" : "var(--red)" }}>
+                                                {s.signal?.toUpperCase()}
+                                            </span>
+                                            <span style={{ fontSize: 11, color: "var(--tx2)" }}>{s.symbol}</span>
+                                        </div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                            <span style={{ fontSize: 10, color: "var(--tx3)", fontFamily: "var(--mono)" }}>{s.confidence}%</span>
+                                            <span className={`bd ${s.action === "executed" ? "g" : s.action === "failed" ? "r" : "dk"}`}>{s.action}</span>
+                                            <span style={{ fontSize: 10, color: "var(--tx3)" }}>{ago(s.time)}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Engine Status */}
+                <div>
+                    <div className="sec-hd">
+                        <div className="sec-title"><Cpu size={12} />Live Engine Status</div>
+                        <span className={`bd ${(e as any).wsConnected ? "g" : "dk"}`}>
+                            <span className="dot" />{(e as any).wsConnected ? "Live" : "Offline"}
+                        </span>
+                    </div>
+                    <div className="engine-grid">
+                        <ScalpPanel e={e} />
+                        <ConfPanel e={e} />
+                        <ExitPanel e={e} />
+                        <ScanPanel e={e} />
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+/* ─── Engine sub‑panels ─────────────────────────────────── */
+
+function ScalpPanel({ e }: { e: any }) {
+    const d = e.scalpingEngine;
+    if (!d) return <EngEmpty title="⚡ Fast Scalping" />;
+    const active = d.entrySignal && !d.cooldown;
+    const noTradeReason = (d.noTradeReason || "").trim();
+    return (
+        <div className="card" style={{ padding: '16px' }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚡ Fast Scalping</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "var(--tx1)", marginTop: 2 }}>{d.symbol}</div>
+                </div>
+                <span className={`bd ${active ? "g" : d.cooldown ? "a" : "dk"}`} style={{ fontSize: 10 }}>{active ? "SIGNAL" : d.cooldown ? "COOL" : "IDLE"}</span>
+            </div>
+            {!active && noTradeReason && (
+                <div style={{ fontSize: 10, color: "var(--amber)", marginBottom: 10, padding: "6px 8px", background: "rgba(245,158,11,0.08)", borderRadius: 6 }}>
+                    <strong>No trade:</strong> {noTradeReason}
+                </div>
+            )}
+            <div className="eng-grid2">
+                <ECell lbl="Imbalance" val={`${d.imbalance?.toFixed(2)}x`} t={d.imbalance > 1.2 ? "g" : d.imbalance < 0.8 ? "r" : undefined} />
+                <ECell lbl="Spread" val={d.spread} t={d.spread === "OK" ? "g" : "a"} />
+                <ECell lbl="TradeFlow" val={d.tradeFlow?.split(" ")[0]} t={d.tradeFlow?.includes("BUY") ? "g" : d.tradeFlow?.includes("SELL") ? "r" : undefined} />
+                <ECell lbl="Trades" val={`${d.activeTrades}/${d.maxTrades}`} t={d.activeTrades > 0 ? "p" : undefined} />
+            </div>
+        </div>
+    );
+}
+
+function ConfPanel({ e }: { e: any }) {
+    const d = e.confidence;
+    const pct = Math.round((d?.score ?? 0) * 100);
+    const bc = "var(--brand)";
+    return (
+        <div className="card" style={{ padding: '16px' }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", textTransform: 'uppercase', letterSpacing: '0.5px' }}>🎯 AI Confidence</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color: pct >= 65 ? "var(--green)" : pct >= 40 ? "var(--amber)" : "var(--red)" }}>
+                        {pct}%
+                    </div>
+                </div>
+                <span className={`bd ${pct >= 65 ? "g" : pct >= 40 ? "a" : "r"}`} style={{ fontSize: 10 }}>{pct >= 65 ? "HIGH" : pct >= 40 ? "MED" : "LOW"}</span>
+            </div>
+            <div className="bar-track" style={{ height: 4, background: 'rgba(255,255,255,0.03)', marginBottom: 16 }}>
+                <div className="bar-fill" style={{ width: `${pct}%`, background: bc, boxShadow: `0 0 10px ${bc}` }} />
+            </div>
+            <div className="eng-grid2">
+                <ECell lbl="OB Strength" val={d?.orderbookStrength ?? "—"} t={d?.orderbookStrength === "Strong" ? "g" : d?.orderbookStrength === "Weak" ? "r" : undefined} />
+                <ECell lbl="Momentum" val={d?.momentum ?? "—"} t={d?.momentum === "HIGH" ? "g" : d?.momentum === "LOW" ? "r" : undefined} />
+                <ECell lbl="Flow" val={d?.tradeFlow ?? "—"} t={d?.tradeFlow === "BUY" ? "g" : d?.tradeFlow === "SELL" ? "r" : undefined} />
+                <ECell lbl="Spread" val={d?.spreadStable ? "Stable" : "Volatile"} t={d?.spreadStable ? "g" : "a"} />
+            </div>
+        </div>
+    );
+}
+
+function ExitPanel({ e }: { e: any }) {
+    const d = e.dynamicExit;
+    const hp = d?.maxHoldSec > 0 ? Math.min(100, (d.holdTimeSec / d.maxHoldSec) * 100) : 0;
+    const hc = hp > 80 ? "var(--red)" : hp > 50 ? "var(--amber)" : "var(--brand)";
+    return (
+        <div className="card" style={{ padding: '16px' }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔁 Dynamic Exit</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)", marginTop: 4 }}>
+                        {d?.active ? "Active Monitor" : "Monitoring Idle"}
+                    </div>
+                </div>
+                <span className={`bd ${d?.active ? "p" : "dk"}`} style={{ fontSize: 10 }}>{d?.active ? "LIVE" : "IDLE"}</span>
+            </div>
+            {d?.active && (
+                <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontSize: 9, color: "var(--tx3)", fontWeight: 800, textTransform: "uppercase" }}>Time Decay</span>
+                        <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: hc, fontWeight: 700 }}>
+                            {d.holdTimeSec}s / {d.maxHoldSec}s
+                        </span>
+                    </div>
+                    <div className="bar-track" style={{ height: 3, background: 'rgba(255,255,255,0.03)' }}>
+                        <div className="bar-fill" style={{ width: `${hp}%`, background: hc }} />
+                    </div>
+                </div>
+            )}
+            <div className="eng-grid2">
+                <ECell lbl="TP Removed" val={d?.tpRemoved ? "Yes" : "No"} t={d?.tpRemoved ? "a" : undefined} />
+                <ECell lbl="Trailing SL" val={d?.trailingSL ? "ON" : "OFF"} t={d?.trailingSL ? "g" : undefined} />
+                <ECell lbl="SL Trail %" val={`${d?.slTrailPct ?? 0}%`} />
+                <ECell lbl="Status" val={d?.active ? "Running" : "Idle"} t={d?.active ? "p" : undefined} />
+            </div>
+        </div>
+    );
+}
+
+function ScanPanel({ e }: { e: any }) {
+    const syms: any[] = e.symbolScan ?? [];
+    const sc: Record<string, string> = {
+        ENTRY_SIGNAL: "var(--brand)", IN_POSITION: "var(--brand2)",
+        COOLING_DOWN: "var(--amber)", SPREAD_HIGH: "var(--red)",
+        TRADABLE: "var(--cyan)", NO_SIGNAL: "var(--tx3)"
+    };
+    if (!syms.length) return <EngEmpty title="📡 Scanner" />;
+    return (
+        <div className="card" style={{ padding: '16px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", textTransform: 'uppercase', marginBottom: 16, letterSpacing: '0.5px' }}>📡 Multi-Symbol Scanner</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 180, overflowY: "auto" }}>
+                {syms.map((s: any) => (
+                    <div key={s.symbol} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.03)' }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: sc[s.status] ?? "var(--tx3)", boxShadow: `0 0 10px ${sc[s.status] ?? "transparent"}` }} />
+                            <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--mono)", color: "var(--tx1)" }}>
+                                {s.symbol?.replace("USD", "")}
+                            </span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 10, color: "var(--tx3)", fontFamily: "var(--mono)" }}>
+                                ${Number(s.lastPrice).toLocaleString()}
+                            </span>
+                            <span style={{ fontSize: 9, fontWeight: 800, color: sc[s.status] ?? "var(--tx3)", textTransform: 'uppercase' }}>
+                                {s.status?.replace("_", " ")}
+                            </span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function EngEmpty({ title }: { title: string }) {
+    return (
+        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 120 }}>
+            <Zap size={20} color="var(--tx3)" style={{ marginBottom: 12 }} />
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--tx3)", textTransform: 'uppercase' }}>{title}</div>
+            <div style={{ fontSize: 10, color: "var(--tx3)", marginTop: 4 }}>Awaiting engine data...</div>
+        </div>
+    );
 }

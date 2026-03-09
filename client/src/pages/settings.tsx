@@ -1,142 +1,327 @@
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
-import { Key, Lock, CheckCircle2, AlertCircle, Copy } from "lucide-react";
 import { useState, useEffect } from "react";
-
-const API_KEYS_STORAGE_KEY = "delta_api_keys";
-
-function maskKey(key: string) {
-  if (!key || key.length < 8) return "••••••••";
-  return key.slice(0, 4) + "••••••••" + key.slice(-4);
-}
+import { useToast } from "@/hooks/use-toast";
+import { Settings, Key, Server, Zap, Save, RefreshCw, Eye, EyeOff, Copy, Check, ShieldAlert, ExternalLink, Wifi } from "lucide-react";
 
 export default function SettingsPage() {
-  const { toast } = useToast();
-  const [apiKey, setApiKey] = useState("");
-  const [secretKey, setSecretKey] = useState("");
-  const [savedApiKeyMasked, setSavedApiKeyMasked] = useState("");
-  const [isConnected, setIsConnected] = useState(false);
-  const [setupError, setSetupError] = useState<string | null>(null);
-  const [serverIp, setServerIp] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [editingApiKey, setEditingApiKey] = useState(false);
+    const { toast } = useToast();
+    const [apiKey, setApiKey] = useState("");
+    const [apiSecret, setApiSecret] = useState("");
+    const [testnet, setTestnet] = useState(true);
+    const [riskPct, setRiskPct] = useState("1.5");
+    const [showKey, setShowKey] = useState(false);
+    const [showSec, setShowSec] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [saved, setSaved] = useState(false);
 
-  // Real Delta status: call setup-status so we know if Delta actually accepts keys (not just "keys exist")
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/debug/setup-status");
-        const data = await res.json();
-        if (cancelled) return;
-        if (data.ok) {
-          setIsConnected(true);
-          setSetupError(null);
-          setSavedApiKeyMasked(data.apiKeyPrefix ? data.apiKeyPrefix + "••••••••" : "From .env");
-        } else {
-          setIsConnected(false);
-          setSetupError(data.deltaErrorFriendly || data.deltaError || data.message || "Connection failed");
-          setServerIp(data.serverIp ?? null);
-          setSavedApiKeyMasked(data.apiKeyPrefix ? data.apiKeyPrefix + "••••••••" : "Configured in .env");
+    // IP Whitelist state
+    const [ipInfo, setIpInfo] = useState<{
+        serverIp?: string;
+        ipWhitelisted?: boolean;
+        deltaError?: string;
+    } | null>(null);
+    const [ipLoading, setIpLoading] = useState(false);
+    const [copiedIp, setCopiedIp] = useState<string | null>(null);
+
+    useEffect(() => {
+        fetch("/api/settings").then((r) => r.json()).then((d) => {
+            if (d?.apiKey) setApiKey(d.apiKey);
+            if (d?.apiSecret) setApiSecret(d.apiSecret);
+            if (d?.testnet !== undefined) setTestnet(d.testnet);
+            if (d?.riskPercent) setRiskPct(String(d.riskPercent));
+        }).catch(() => { });
+
+        // Auto-fetch IP info on load
+        fetchIpInfo();
+    }, []);
+
+    async function fetchIpInfo() {
+        setIpLoading(true);
+        try {
+            const r = await fetch("/api/debug/setup-status");
+            const d = await r.json();
+            setIpInfo({
+                serverIp: d?.serverIp,
+                ipWhitelisted: d?.ip_whitelisted,
+                deltaError: d?.deltaError,
+            });
+        } catch {
+            setIpInfo({ serverIp: undefined, ipWhitelisted: false });
         }
-      } catch {
-        if (!cancelled) {
-          setIsConnected(false);
-          setSetupError("Could not reach server. Run: npm run dev");
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+        setIpLoading(false);
+    }
 
-  const handleSave = () => {
-    toast({
-      title: "Manual Key Entry Disabled",
-      description: "API keys are now managed securely via the server's .env file to prevent sync issues.",
-      variant: "default",
-    });
-  };
+    function copyIp(ip: string) {
+        navigator.clipboard.writeText(ip).then(() => {
+            setCopiedIp(ip);
+            toast({ title: "IP Copied ✅", description: ip });
+            setTimeout(() => setCopiedIp(null), 2500);
+        });
+    }
 
-  return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <h1 className="text-3xl font-bold text-white tracking-tight">System Settings</h1>
+    async function save() {
+        setLoading(true);
+        try {
+            const r = await fetch("/api/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ apiKey, apiSecret, testnet, riskPercent: parseFloat(riskPct) }),
+            });
+            if (r.ok) { setSaved(true); toast({ title: "Settings saved ✅" }); setTimeout(() => setSaved(false), 3000); }
+            else { toast({ title: "Save failed", variant: "destructive" }); }
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+        setLoading(false);
+    }
 
-      <Card className="glass-card">
-        <CardHeader>
-          <div className="flex items-center space-x-2">
-            <Key className="w-5 h-5 text-primary" />
-            <CardTitle>Exchange API Configuration</CardTitle>
-          </div>
-          <CardDescription>Server-side API key configuration (.env)</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    async function testConnection() {
+        try {
+            const r = await fetch("/api/delta/balance");
+            const d = await r.json();
+            if (r.ok && d.success && !d.isFallback) toast({ title: "Connection OK ✅", description: `Live Balance: $${d.portfolioValue}` });
+            else if (d.isFallback) toast({ title: "⚠️ IP Not Whitelisted", description: "Connected but balance is estimated. Please whitelist your IP.", variant: "destructive" });
+            else toast({ title: "Connection failed", description: d?.error?.message ?? "Check API keys", variant: "destructive" });
+            // Refresh IP info after test
+            fetchIpInfo();
+        } catch { toast({ title: "Network error", variant: "destructive" }); }
+    }
 
-          <div className={`p-4 rounded-lg border flex flex-col gap-2 ${isConnected ? 'bg-profit/10 border-profit/20 text-profit' : 'bg-destructive/10 border-destructive/30 text-destructive'}`}>
-            <div className="flex items-center gap-3">
-              {isConnected ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
-              <span className="font-mono text-sm font-medium">
-                {isConnected ? 'CONNECTED (Delta API OK)' : 'NOT CONNECTED (Delta rejected keys)'}
-              </span>
-            </div>
-            {!isConnected && setupError && (
-              <p className="text-xs text-muted-foreground mt-1 pl-8">{setupError}</p>
-            )}
-            {!isConnected && serverIp && (
-              <div className="mt-3 pl-8 space-y-2">
-                <p className="text-xs text-muted-foreground font-medium text-foreground">Whitelist ye IP Delta pe (exactly same):</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <code className="bg-black/40 px-3 py-1.5 rounded font-mono text-foreground text-sm border border-border">{serverIp}</code>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-8 text-xs"
-                    onClick={() => {
-                      navigator.clipboard.writeText(serverIp ?? "");
-                      toast({ title: "IP copied", description: "Delta whitelist me paste karo.", duration: 2000 });
-                    }}
-                  >
-                    <Copy className="w-3 h-3 mr-1" /> Copy IP
-                  </Button>
+    // Parse IPs — serverIp can be IPv4 or IPv6 from error response
+    const serverIp = ipInfo?.serverIp;
+    // We know from earlier logs both these IPs are needed
+    // serverIp from API error is the one that needs to be whitelisted
+    const isWhitelisted = ipInfo?.ipWhitelisted === true;
+
+    return (
+        <>
+            <div className="topbar">
+                <div>
+                    <div className="topbar-title">Settings</div>
+                    <div className="topbar-sub">Configure API keys and bot parameters</div>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Delta pe IP save karne ke baad <strong>1–2 minute wait karo</strong>, phir neeche &quot;Refresh Connection&quot; dabao. Agar aapne pehle koi aur IP add kiya tha (e.g. 103.x.x.x) aur ab yahan alag IP dikh raha hai, to <strong>yahan wala IP hi</strong> Delta pe add karo — ye server ka actual IP hai.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2 opacity-60 grayscale-[0.5]">
-            <Label htmlFor="apiKey">API Key (Read Only)</Label>
-            <div className="relative">
-              <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                id="apiKey"
-                readOnly
-                className="pl-9 font-mono bg-black/20"
-                value={savedApiKeyMasked || "Configured in server .env"}
-              />
             </div>
-          </div>
 
-          <p className="text-xs text-muted-foreground flex items-center">
-            <Lock className="w-3 h-3 mr-1" /> API Keys are now strictly loaded from the <strong>.env</strong> file on your computer for maximum security.
-          </p>
-        </CardContent>
-        <CardFooter className="flex justify-end border-t border-border pt-6">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => window.location.reload()}
-            className="border-primary/50 text-primary hover:bg-primary/10"
-          >
-            Refresh Connection
-          </Button>
-        </CardFooter>
-      </Card>
-    </div>
-  );
+            <div className="page" style={{ maxWidth: 800 }}>
+
+                {/* ── IP Whitelist Card ─────────────────── */}
+                <div className="card" style={{
+                    border: isWhitelisted
+                        ? "1px solid rgba(16,185,129,0.25)"
+                        : "1px solid rgba(245,158,11,0.35)",
+                    background: isWhitelisted
+                        ? "rgba(16,185,129,0.04)"
+                        : "rgba(245,158,11,0.04)",
+                }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{
+                                width: 32, height: 32, borderRadius: 9,
+                                background: isWhitelisted ? "rgba(16,185,129,0.12)" : "rgba(245,158,11,0.12)",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                color: isWhitelisted ? "var(--green)" : "var(--amber)",
+                            }}>
+                                <ShieldAlert size={15} />
+                            </div>
+                            <div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>IP Whitelist</div>
+                                <div style={{ fontSize: 10, color: "var(--tx3)" }}>
+                                    Add these IPs to your Delta Exchange API key
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span className={`bd ${isWhitelisted ? "g" : "a"}`}>
+                                {isWhitelisted ? "✓ Whitelisted" : "⚠ Not Whitelisted"}
+                            </span>
+                            <button className="btn btn-dk" onClick={fetchIpInfo} disabled={ipLoading}
+                                style={{ padding: "5px 10px", fontSize: 11 }}>
+                                <RefreshCw size={11} style={{ animation: ipLoading ? "spin 1s linear infinite" : "none" }} />
+                                {ipLoading ? "Checking…" : "Refresh"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Status banner */}
+                    {!isWhitelisted && (
+                        <div style={{
+                            padding: "10px 14px", borderRadius: 10, marginBottom: 14,
+                            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.20)",
+                            fontSize: 12, color: "var(--amber)", lineHeight: 1.6,
+                        }}>
+                            🚨 Your server IP is <strong>not whitelisted</strong> on Delta Exchange. This blocks live balance
+                            and order execution. Copy the IP below and add it on{" "}
+                            <a href="https://india.delta.exchange" target="_blank" rel="noreferrer"
+                                style={{ color: "var(--amber)", textDecoration: "underline", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                india.delta.exchange <ExternalLink size={10} />
+                            </a>
+                            {" "}→ API Keys → Edit → Whitelist IPs.
+                        </div>
+                    )}
+
+                    {isWhitelisted && (
+                        <div style={{
+                            padding: "10px 14px", borderRadius: 10, marginBottom: 14,
+                            background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.15)",
+                            fontSize: 12, color: "var(--green)",
+                        }}>
+                            ✅ IP is whitelisted! Live balance and trades are active.
+                        </div>
+                    )}
+
+                    {/* IP address rows */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {serverIp ? (
+                            <IpRow ip={serverIp} label="Server IP (from Delta error)" copied={copiedIp === serverIp} onCopy={() => copyIp(serverIp)} />
+                        ) : (
+                            <div style={{
+                                padding: "12px 14px", borderRadius: 10,
+                                background: "rgba(0,0,0,0.20)", border: "1px dashed var(--bdr2)",
+                                fontSize: 12, color: "var(--tx3)", textAlign: "center",
+                            }}>
+                                {ipLoading
+                                    ? "Fetching IP from Delta Exchange..."
+                                    : isWhitelisted
+                                        ? "IP is whitelisted — no action needed."
+                                        : "Click Refresh or Test Connection to detect your IP address."
+                                }
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Instructions */}
+                    <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: "rgba(0,0,0,0.20)", border: "1px solid var(--bdr)" }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 8 }}>
+                            How to whitelist
+                        </div>
+                        {[
+                            "Go to india.delta.exchange → Login",
+                            "Click your name → API Keys",
+                            "Click Edit on your API key",
+                            "Scroll to Whitelisted IPs → Add the IP above",
+                            "Save → Wait 1-2 minutes → Click Test Connection",
+                        ].map((step, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 5 }}>
+                                <div style={{
+                                    width: 16, height: 16, borderRadius: "50%", flexShrink: 0, marginTop: 1,
+                                    background: "var(--indigo-dim)", color: "var(--indigo)",
+                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                    fontSize: 9, fontWeight: 700,
+                                }}>
+                                    {i + 1}
+                                </div>
+                                <span style={{ fontSize: 11, color: "var(--tx2)", lineHeight: 1.5 }}>{step}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* ── API Keys ─────────────────────────── */}
+                <div className="card">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 9, background: "var(--indigo-dim)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--indigo)" }}><Key size={15} /></div>
+                        <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>API Keys</div>
+                            <div style={{ fontSize: 10, color: "var(--tx3)" }}>Delta Exchange credentials</div>
+                        </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 14 }}>
+                        <label className="form-label">API Key</label>
+                        <div style={{ position: "relative" }}>
+                            <input type={showKey ? "text" : "password"} className="form-input" value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)} placeholder="Enter API key…" style={{ paddingRight: 40 }} />
+                            <button onClick={() => setShowKey(!showKey)}
+                                style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--tx3)", padding: 0 }}>
+                                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                        </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 14 }}>
+                        <label className="form-label">API Secret</label>
+                        <div style={{ position: "relative" }}>
+                            <input type={showSec ? "text" : "password"} className="form-input" value={apiSecret}
+                                onChange={(e) => setApiSecret(e.target.value)} placeholder="Enter API secret…" style={{ paddingRight: 40 }} />
+                            <button onClick={() => setShowSec(!showSec)}
+                                style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--tx3)", padding: 0 }}>
+                                {showSec ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: "rgba(0,0,0,0.20)", border: "1px solid var(--bdr2)", marginBottom: 14 }}>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--tx1)" }}>Use Testnet</div>
+                            <div style={{ fontSize: 11, color: "var(--tx3)" }}>Paper trading — no real funds at risk</div>
+                        </div>
+                        <button onClick={() => setTestnet(!testnet)} style={{
+                            width: 42, height: 24, borderRadius: 99, cursor: "pointer",
+                            background: testnet ? "linear-gradient(135deg,var(--indigo),var(--violet))" : "rgba(255,255,255,0.08)",
+                            border: `1px solid ${testnet ? "transparent" : "var(--bdr2)"}`,
+                            position: "relative", transition: "all .2s",
+                            boxShadow: testnet ? "0 2px 10px var(--indigo-glow)" : "none",
+                        }}>
+                            <div style={{ position: "absolute", top: 3, left: testnet ? 20 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s", boxShadow: "0 1px 4px rgba(0,0,0,0.4)" }} />
+                        </button>
+                    </div>
+                    <button className="btn btn-dk" onClick={testConnection} style={{ marginBottom: 0 }}>
+                        <Wifi size={14} />Test Connection
+                    </button>
+                </div>
+
+                {/* ── Bot Parameters ────────────────────── */}
+                <div className="card">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 9, background: "rgba(16,185,129,0.10)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--green)" }}><Zap size={15} /></div>
+                        <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx1)" }}>Bot Parameters</div>
+                            <div style={{ fontSize: 10, color: "var(--tx3)" }}>Risk &amp; strategy settings</div>
+                        </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 14 }}>
+                        <label className="form-label">Default Risk per Trade (%)</label>
+                        <input type="number" className="form-input" value={riskPct}
+                            onChange={(e) => setRiskPct(e.target.value)} min={0.1} max={10} step={0.1} />
+                    </div>
+                </div>
+
+                {/* ── Save ─────────────────────────────── */}
+                <div style={{ display: "flex", gap: 12 }}>
+                    <button className="btn btn-p" onClick={save} disabled={loading} style={{ flex: 1, justifyContent: "center" }}>
+                        <Save size={14} />{loading ? "Saving…" : saved ? "Saved ✅" : "Save Settings"}
+                    </button>
+                </div>
+            </div>
+        </>
+    );
+}
+
+// ── IP Row Component ────────────────────────────────────
+function IpRow({ ip, label, copied, onCopy }: { ip: string; label: string; copied: boolean; onCopy: () => void }) {
+    return (
+        <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 14px", borderRadius: 10,
+            background: "rgba(0,0,0,0.25)", border: "1px solid var(--bdr2)",
+            gap: 10,
+        }}>
+            <div>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".6px", color: "var(--tx3)", marginBottom: 3 }}>
+                    {label}
+                </div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: "var(--tx1)", wordBreak: "break-all" }}>
+                    {ip}
+                </div>
+            </div>
+            <button
+                onClick={onCopy}
+                title="Copy IP"
+                style={{
+                    flexShrink: 0, width: 34, height: 34, borderRadius: 9, cursor: "pointer",
+                    border: `1px solid ${copied ? "rgba(16,185,129,0.40)" : "var(--bdr2)"}`,
+                    background: copied ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.04)",
+                    color: copied ? "var(--green)" : "var(--tx2)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    transition: "all .2s",
+                }}
+            >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+            </button>
+        </div>
+    );
 }

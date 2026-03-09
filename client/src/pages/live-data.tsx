@@ -1,150 +1,175 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { useLiveDelta, type LiveCandle, type LiveTicker } from "@/hooks/use-live-delta";
-import { Radio, Wifi, WifiOff, Clock, TrendingUp } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState, useEffect } from "react";
+import { Radio, RefreshCw, TrendingUp, TrendingDown, Activity } from "lucide-react";
 
-const MAX_EVENTS = 80;
+const fmt = (n: number, d = 2) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
-type LogEntry = {
-  type: "ticker" | "candle";
-  at: string;
-  payload: LiveTicker | LiveCandle;
-};
+function useLiveData() {
+    const [ticker, setTicker] = useState<any[]>([]);
+    const [orderbook, setOB] = useState<any>(null);
+    const [trades24, setTrades24] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const load = async () => {
+        try {
+            const [tb, ob, tr] = await Promise.all([
+                fetch("/api/delta/tickers").then((r) => r.json()),
+                fetch("/api/delta/orderbook?symbol=BTCUSD").then((r) => r.json()),
+                fetch("/api/delta/trades?symbol=BTCUSD&limit=20").then((r) => r.json()),
+            ]);
+            if (Array.isArray(tb)) setTicker(tb.slice(0, 8));
+            if (ob && (ob.buy || ob.sell)) setOB(ob);
+            if (Array.isArray(tr)) setTrades24(tr.slice(0, 20));
+        } catch { }
+        setLoading(false);
+    };
+
+    useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+    return { ticker, orderbook, trades24, loading, refresh: load };
+}
 
 export default function LiveDataPage() {
-  const { liveCandle, liveTicker, connected } = useLiveDelta();
-  const [eventLog, setEventLog] = useState<LogEntry[]>([]);
-  const logEndRef = useRef<HTMLDivElement>(null);
+    const { ticker, orderbook, trades24, loading, refresh } = useLiveData();
+    const [activeTab, setActiveTab] = useState<"tickers" | "orderbook" | "trades">("tickers");
 
-  useEffect(() => {
-    if (!liveTicker) return;
-    setEventLog((prev) => {
-      const next = [...prev, { type: "ticker", at: new Date().toISOString(), payload: liveTicker }];
-      return next.slice(-MAX_EVENTS);
-    });
-  }, [liveTicker]);
-
-  useEffect(() => {
-    if (!liveCandle) return;
-    setEventLog((prev) => {
-      const next = [...prev, { type: "candle", at: new Date().toISOString(), payload: liveCandle }];
-      return next.slice(-MAX_EVENTS);
-    });
-  }, [liveCandle]);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [eventLog]);
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Radio className="w-6 h-6 text-primary" />
-          Live Data (WebSocket)
-        </h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Delta Exchange se real-time ticker aur candlestick – Socket.IO pe kya aa raha hai.
-        </p>
-      </div>
-
-      {/* Connection + latest values */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              {connected ? (
-                <Wifi className="w-4 h-4 text-green-500" />
-              ) : (
-                <WifiOff className="w-4 h-4 text-muted-foreground" />
-              )}
-              Connection
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <Badge variant={connected ? "default" : "secondary"} className={connected ? "bg-green-600 hover:bg-green-600" : ""}>
-                {connected ? "Connected" : "Disconnected"}
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-primary" />
-              Live Ticker (v2/ticker)
-            </CardTitle>
-            <CardDescription>Sabse latest price – mark_price / last_price</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1 font-mono text-sm">
-            {liveTicker ? (
-              <>
-                <div><span className="text-muted-foreground">Symbol:</span> {liveTicker.symbol}</div>
-                <div><span className="text-muted-foreground">Last:</span> {liveTicker.lastPrice}</div>
-                {liveTicker.markPrice != null && <div><span className="text-muted-foreground">Mark:</span> {liveTicker.markPrice}</div>}
-                {liveTicker.indexPrice != null && <div><span className="text-muted-foreground">Index:</span> {liveTicker.indexPrice}</div>}
-              </>
-            ) : (
-              <span className="text-muted-foreground">— Waiting for data…</span>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Clock className="w-4 h-4 text-primary" />
-              Live Candle (candlestick_15m)
-            </CardTitle>
-            <CardDescription>Current 15m OHLC</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1 font-mono text-sm">
-            {liveCandle ? (
-              <>
-                <div><span className="text-muted-foreground">O:</span> {liveCandle.open} <span className="text-muted-foreground">H:</span> {liveCandle.high}</div>
-                <div><span className="text-muted-foreground">L:</span> {liveCandle.low} <span className="text-muted-foreground">C:</span> {liveCandle.close}</div>
-                <div><span className="text-muted-foreground">Vol:</span> {liveCandle.volume} {liveCandle.symbol != null && ` · ${liveCandle.symbol}`}</div>
-              </>
-            ) : (
-              <span className="text-muted-foreground">— Waiting for data…</span>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Event log */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Event log (last {MAX_EVENTS})</CardTitle>
-          <CardDescription>WebSocket se aane wale live-ticker / live-candle events – neeche sabse naya.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="rounded-lg border border-border bg-muted/20 font-mono text-xs max-h-[400px] overflow-y-auto p-3 space-y-2">
-            {eventLog.length === 0 ? (
-              <div className="text-muted-foreground py-4 text-center">Koi event nahi aaya. Connection check karo.</div>
-            ) : (
-              eventLog.map((entry, i) => (
-                <div key={`${entry.at}-${i}`} className="flex gap-3 items-start border-b border-border/50 pb-2 last:border-0">
-                  <span className="text-muted-foreground shrink-0">{new Date(entry.at).toLocaleTimeString()}</span>
-                  <Badge variant="outline" className="shrink-0 text-[10px]">
-                    {entry.type === "ticker" ? "ticker" : "candle"}
-                  </Badge>
-                  <pre className="break-all whitespace-pre-wrap text-muted-foreground flex-1 min-w-0">
-                    {(() => {
-                      const s = JSON.stringify(entry.payload);
-                      return s.length > 280 ? s.slice(0, 280) + "…" : s;
-                    })()}
-                  </pre>
+    return (
+        <>
+            <div className="topbar">
+                <div>
+                    <div className="topbar-title">Live Data</div>
+                    <div className="topbar-sub">Real-time market data from Delta Exchange</div>
                 </div>
-              ))
-            )}
-            <div ref={logEndRef} />
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--green)" }}>
+                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", animation: "_pulse 2s ease-in-out infinite" }} />
+                        Live
+                    </div>
+                    <button className="btn btn-dk" onClick={refresh} style={{ padding: "6px 14px" }}>
+                        <RefreshCw size={13} />Refresh
+                    </button>
+                </div>
+            </div>
+
+            <div className="page">
+                {/* Tabs */}
+                <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", padding: 4, borderRadius: 10, border: "1px solid var(--bdr2)", width: "fit-content" }}>
+                    {(["tickers", "orderbook", "trades"] as const).map((t) => (
+                        <button key={t} onClick={() => setActiveTab(t)} style={{
+                            padding: "7px 18px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                            border: "none", transition: "all .15s", textTransform: "capitalize",
+                            background: activeTab === t ? "linear-gradient(135deg,var(--indigo),var(--violet))" : "transparent",
+                            color: activeTab === t ? "#fff" : "var(--tx2)",
+                            boxShadow: activeTab === t ? "0 2px 12px var(--indigo-glow)" : "none",
+                        }}>{t}</button>
+                    ))}
+                </div>
+
+                {loading ? (
+                    <div className="empty-state"><div className="spinner" /><span>Loading market data…</span></div>
+                ) : (
+                    <>
+                        {/* Tickers */}
+                        {activeTab === "tickers" && (
+                            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                                <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--bdr)", display: "flex", alignItems: "center", gap: 8 }}>
+                                    <Activity size={14} style={{ color: "var(--indigo)" }} />
+                                    <span className="sec-title" style={{ margin: 0 }}>Market Tickers</span>
+                                </div>
+                                <div className="tbl-wrap">
+                                    <table className="tbl">
+                                        <thead>
+                                            <tr><th>Symbol</th><th>Price</th><th>24h Change</th><th>Volume</th><th>Mark</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            {ticker.map((t: any) => {
+                                                const chg = parseFloat(t.change_24h ?? t.price_change_24h ?? "0");
+                                                const price = parseFloat(t.close ?? t.last_price ?? "0");
+                                                const vol = parseFloat(t.volume ?? "0");
+                                                return (
+                                                    <tr key={t.symbol}>
+                                                        <td><span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: "var(--tx1)" }}>{t.symbol}</span></td>
+                                                        <td><span className="mono" style={{ fontWeight: 700 }}>${fmt(price)}</span></td>
+                                                        <td>
+                                                            <span style={{ display: "flex", alignItems: "center", gap: 5, color: chg >= 0 ? "var(--green)" : "var(--red)", fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700 }}>
+                                                                {chg >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                                                                {chg >= 0 ? "+" : ""}{chg.toFixed(2)}%
+                                                            </span>
+                                                        </td>
+                                                        <td><span className="mono" style={{ color: "var(--tx2)" }}>{vol.toFixed(0)}</span></td>
+                                                        <td><span className="mono" style={{ color: "var(--tx2)" }}>${fmt(parseFloat(t.mark_price ?? "0"))}</span></td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Orderbook */}
+                        {activeTab === "orderbook" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                                {(["sell", "buy"] as const).map((side) => (
+                                    <div key={side} className="card" style={{ padding: 0, overflow: "hidden" }}>
+                                        <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--bdr)", display: "flex", alignItems: "center", gap: 8 }}>
+                                            <span className={`bd ${side === "buy" ? "g" : "r"}`} style={{ fontSize: 9 }}>{side === "buy" ? "BIDS" : "ASKS"}</span>
+                                            <span style={{ fontSize: 11, color: "var(--tx2)" }}>BTCUSD Orderbook</span>
+                                        </div>
+                                        <div style={{ padding: "8px 14px" }}>
+                                            {!orderbook ? (
+                                                <div className="empty-state" style={{ padding: "20px 0" }}>No data</div>
+                                            ) : (
+                                                (orderbook[side] ?? []).slice(0, 10).map(([price, qty]: string[], i: number) => {
+                                                    const p = parseFloat(price), q = parseFloat(qty);
+                                                    const maxQ = Math.max(...(orderbook[side] ?? []).slice(0, 10).map(([, v]: string[]) => parseFloat(v)));
+                                                    const pct = maxQ > 0 ? (q / maxQ) * 100 : 0;
+                                                    return (
+                                                        <div key={i} style={{ position: "relative", marginBottom: 4, borderRadius: 6, overflow: "hidden" }}>
+                                                            <div style={{ position: "absolute", inset: 0, background: side === "buy" ? "rgba(16,185,129,0.06)" : "rgba(244,63,94,0.06)", width: `${pct}%`, transition: "width .3s" }} />
+                                                            <div style={{ position: "relative", display: "flex", justifyContent: "space-between", padding: "6px 10px", fontSize: 12 }}>
+                                                                <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: side === "buy" ? "var(--green)" : "var(--red)" }}>{fmt(p)}</span>
+                                                                <span style={{ fontFamily: "var(--mono)", color: "var(--tx2)" }}>{q.toFixed(4)}</span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Recent Trades */}
+                        {activeTab === "trades" && (
+                            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                                <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--bdr)" }}>
+                                    <div className="sec-title">Recent Trades — BTCUSD</div>
+                                </div>
+                                <div className="tbl-wrap">
+                                    <table className="tbl">
+                                        <thead><tr><th>Side</th><th>Price</th><th>Size</th><th>Time</th></tr></thead>
+                                        <tbody>
+                                            {trades24.length === 0
+                                                ? <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--tx3)", padding: "30px 0" }}>No recent trades</td></tr>
+                                                : trades24.map((t: any, i: number) => {
+                                                    const isBuy = t.side === "buy" || t.buyer_role === "taker";
+                                                    return (
+                                                        <tr key={i}>
+                                                            <td><span className={`bd ${isBuy ? "g" : "r"}`} style={{ fontSize: 9 }}>{isBuy ? "BUY" : "SELL"}</span></td>
+                                                            <td><span className="mono" style={{ fontWeight: 700, color: isBuy ? "var(--green)" : "var(--red)" }}>${fmt(parseFloat(t.price ?? t.fill_price ?? "0"))}</span></td>
+                                                            <td><span className="mono" style={{ color: "var(--tx2)" }}>{parseFloat(t.size ?? t.qty ?? "0").toFixed(4)}</span></td>
+                                                            <td><span style={{ fontSize: 11, color: "var(--tx3)" }}>{t.timestamp ? new Date(t.timestamp * 1000).toLocaleTimeString() : "—"}</span></td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+        </>
+    );
 }
