@@ -22,6 +22,8 @@ let memDailyPnl = 0;
 let memTradeCount = 0;
 let memConsecutiveLosses = 0;
 const memActivePositions: Map<string, { symbol: string; productId: number; side: string; entryPrice: number; entryTime: Date }> = new Map();
+const memTradeHistory: Trade[] = []; // In-memory buffer for recent trades
+const MAX_MEM_TRADES = 100;
 
 export interface EntryContext {
     side: 'buy' | 'sell';
@@ -226,6 +228,23 @@ export async function incrementDailyTradeCount(): Promise<void> {
 
 /** Record full trade details for analysis / Python AI */
 export async function appendTradeOutcome(outcome: TradeOutcome): Promise<void> {
+    // Save to memory buffer first
+    const memTrade: any = {
+        id: Math.random().toString(36).substring(7),
+        symbol: outcome.symbol,
+        side: outcome.side,
+        entryPrice: outcome.entryPrice,
+        exitPrice: outcome.exitPrice,
+        pnlUsd: outcome.pnlUsd,
+        entryTime: new Date(outcome.entryTime),
+        exitTime: new Date(outcome.exitTime),
+        exitReason: outcome.exitReason,
+        context: outcome.context || null
+    };
+
+    memTradeHistory.unshift(memTrade);
+    if (memTradeHistory.length > MAX_MEM_TRADES) memTradeHistory.pop();
+
     if (!isDbAvailable()) return;
     try {
         await db.insert(trades).values({
@@ -266,11 +285,15 @@ export async function clearEntryContext(symbol: string): Promise<void> {
 
 /** Get recent closed trades for history UI */
 export async function getRecentTrades(limit = 100): Promise<Trade[]> {
-    if (!isDbAvailable()) return []; // Future: in-memory trade history buffer
+    if (!isDbAvailable()) {
+        return memTradeHistory.slice(0, limit) as Trade[];
+    }
     try {
         return await db.select()
             .from(trades)
             .orderBy(desc(trades.exitTime))
             .limit(limit);
-    } catch { return []; }
+    } catch {
+        return memTradeHistory.slice(0, limit) as Trade[];
+    }
 }

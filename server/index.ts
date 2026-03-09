@@ -67,25 +67,41 @@ export function log(message: string, source = "bot") {
   });
 
   // --- 🧠 START PYTHON BRAIN LAYER (MARKET FILTER) ---
-  const spawnPythonFilter = () => {
+  const spawnPythonFilter = (cmd = "python3") => {
     const pyPath = path.join(__dirname, "../python_service/market_filter.py");
-    log(`Launching Python Market Filter: ${pyPath}`);
+    log(`Launching Python Market Filter: ${pyPath} (using ${cmd})`);
 
-    // -X utf8 flag: Force Python to use UTF-8 on Windows (fixes emoji/unicode UnicodeEncodeError)
-    const pyProcess = spawn("python", ["-X", "utf8", pyPath], {
+    // -X utf8 flag: Force Python to use UTF-8 (fixes emoji/unicode issues)
+    const pyProcess = spawn(cmd, ["-X", "utf8", pyPath], {
       env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }
+    });
+
+    pyProcess.on("error", (err: any) => {
+      if (err.code === 'ENOENT') {
+        log(`Python command '${cmd}' not found.`, "filter");
+        if (cmd === "python3") {
+          log("Retrying with 'python'...", "filter");
+          spawnPythonFilter("python");
+        } else {
+          log("Critical: Python is not installed or not in PATH.", "filter");
+        }
+      } else {
+        log(`Python filter process error: ${err.message}`, "filter");
+      }
     });
 
     pyProcess.stdout.on("data", (data) => log(`[PYTHON-STDOUT] ${data.toString("utf8").trim()}`, "filter"));
     pyProcess.stderr.on("data", (data) => log(`[PYTHON-STDERR] ${data.toString("utf8").trim()}`, "filter"));
 
     pyProcess.on("close", (code) => {
-      log(`Python filter exited with code ${code}. Re-spawning in 5s...`);
-      setTimeout(spawnPythonFilter, 5000);
+      if (code !== 0 && code !== null) {
+        log(`Python filter exited with code ${code}. Re-spawning in 5s...`);
+        setTimeout(() => spawnPythonFilter(cmd), 5000);
+      }
     });
   };
 
-  spawnPythonFilter();
+  spawnPythonFilter("python3"); // Start with python3 as it's standard on Linux/Docker
 
   // --- ⚡ DELTA WEBSOCKET & TRADER INITIALIZATION ---
   const { startDeltaSocket } = await import("./delta-socket");

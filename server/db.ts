@@ -14,9 +14,9 @@ try {
             idleTimeoutMillis: 30000,
         });
         dbInstance = drizzle(poolInstance, { schema });
-        console.log("📂 Database connection initialized (Optional Mode)");
+        console.log("⚡ Database active: Persistent logging enabled.");
     } else {
-        console.warn("⚠️ DATABASE_URL not set. Running in memory-only mode.");
+        console.log("🚀 Running in High-Performance Local-Memory mode (No Database).");
     }
 } catch (e) {
     console.error("❌ Database initialization failed, continuing without DB:", e);
