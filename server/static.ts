@@ -7,9 +7,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export function serveStatic(app: Express) {
-    const distPath = path.resolve(__dirname, "../client");
+    // In production, esbuild puts index.js in dist/
+    // Vite puts frontend in dist/public/
+    const distPath = path.resolve(__dirname, "public");
 
     if (!fs.existsSync(distPath)) {
+        // Fallback for dev if needed, or structured logging
+        const devPath = path.resolve(__dirname, "../client");
+        if (fs.existsSync(devPath)) {
+            app.use(express.static(devPath));
+            app.use((_req, res) => res.sendFile(path.resolve(devPath, "index.html")));
+            return;
+        }
         throw new Error(`Could not find static files at ${distPath}`);
     }
 
