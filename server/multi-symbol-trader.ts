@@ -89,29 +89,36 @@ export interface TradeDecision {
     volatility?: 'LOW_SQUEEZE' | 'NORMAL' | 'HIGH_EXPANSION' | 'EXTREME_VOLATILITY';
 }
 
-// Max 2 trade: ek sath 2 se zyada positions nahi. 1 chaho to .env me MULTI_SYMBOL_MAX_CONCURRENT=1
+// Max 2 trade hard-cap: 4 trade na khule, analyse karke hi order bhejein
 const MULTI_SYMBOL_CONFIG = {
-    MIN_STRENGTH: 25,           // Lowered from 30 for high sensitivity
-    MIN_CONFIDENCE: 25,         // Lowered from 35
-    MAX_CONCURRENT: Math.min(5, Math.max(1, parseInt(process.env.MULTI_SYMBOL_MAX_CONCURRENT || "2", 10))), // default 2, 1–5 allowed
+    MIN_STRENGTH: 30,           // Thoda strict – fast false signals kam
+    MIN_CONFIDENCE: 30,
+    MAX_CONCURRENT: Math.min(2, Math.max(1, parseInt(process.env.MULTI_SYMBOL_MAX_CONCURRENT || "2", 10))), // hard-cap 2
     CAPITAL_PER_TRADE: parseFloat(process.env.SCALP_CAPITAL_PER_TRADE || "0.20"),
     SL_PCT: parseFloat(process.env.SCALP_SL_PCT || "0.25"),
     TP_PCT: parseFloat(process.env.SCALP_TP_PCT || "0.45"),
-    DAILY_LOSS_LIMIT_USD: 20.0, // Increased from $5 to $20
-    COOLDOWN_MS: 30000,         // Reduced cooldown from 60s to 30s
+    DAILY_LOSS_LIMIT_USD: 20.0,
+    COOLDOWN_MS: parseInt(process.env.MULTI_SYMBOL_COOLDOWN_MS || "45000", 10),
+    GLOBAL_COOLDOWN_MS: parseInt(process.env.GLOBAL_COOLDOWN_MS || "20000", 10),
     TRADE_MODE: 'all',
     MAX_LOSS_PER_TRADE_PCT: 5,
 };
 
 const symbolCooldowns = new Map<string, number>();
-/** Symbols currently in the process of opening (order placed, not yet in Delta list) – in count so 3rd trade na khul jaye */
+let lastGlobalTradeTime = 0;   // Kisi bhi symbol pe last trade – iske baad GLOBAL_COOLDOWN_MS wait
 const pendingOpens = new Set<string>();
+/** Ek hi time pe ek hi order open – race se 4 trade na khul jaye */
+let openOrderLock: Promise<void> = Promise.resolve();
 
 // --- 📉 TREND FILTER: Ulti trade band — BUY sirf uptrend/neutral, SELL sirf downtrend/neutral
 const TREND_FILTER_ENABLED = process.env.TREND_FILTER !== '0';
 const priceHistoryForTrend = new Map<string, number[]>();
 const TREND_LOOKBACK = 8;
-const TREND_THRESHOLD_PCT = 0.04; // 0.04% move = trend
+const TREND_THRESHOLD_PCT = 0.04;
+
+/** Signal confirm: utna hi trade lo jab signal thode time tak same direction me rahe (analyse then send) */
+const SIGNAL_CONFIRM_MS = Math.max(5000, parseInt(process.env.SIGNAL_CONFIRM_MS || "10000", 10)); // 10s default
+const signalConfirmMap = new Map<string, { direction: 'buy' | 'sell'; firstSeen: number }>();
 
 function getShortTermTrend(symbol: string, currentPrice: number): 'up' | 'down' | 'neutral' {
     let arr = priceHistoryForTrend.get(symbol) || [];
@@ -307,6 +314,8 @@ export async function executeMultiSymbolTrade(
                 size, entryPrice: decision.price, timestamp: Date.now()
             });
             symbolCooldowns.set(decision.symbol, Date.now());
+            lastGlobalTradeTime = Date.now();
+            signalConfirmMap.delete(decision.symbol);
             getMultiSymbolManager().addPosition(decision.symbol);
 
             // Update engine state
@@ -451,7 +460,7 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
             return;
         }
 
-        // Live count from Delta + pending opens (cache/race se 3 trade na khul jaye – max 2 hi rahe)
+        // Live count from Delta – max 2 hard (4 trade band)
         let openCount = getLocalPositions().length;
         try {
             const res = await getPositions();
@@ -459,19 +468,24 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
                 openCount = res.result.filter((p: { size?: number }) => Math.abs(Number(p.size) || 0) > 0).length;
             }
         } catch (_) { /* use cache count */ }
-        const totalWithPending = openCount + pendingOpens.size;
-        if (totalWithPending >= MULTI_SYMBOL_CONFIG.MAX_CONCURRENT) {
-            const reason = `Max positions (${openCount}+${pendingOpens.size}=${totalWithPending}/${MULTI_SYMBOL_CONFIG.MAX_CONCURRENT}) – zyada positions = zyada loss risk`;
+        if (openCount >= MULTI_SYMBOL_CONFIG.MAX_CONCURRENT) {
+            const reason = `Max positions (${openCount}/${MULTI_SYMBOL_CONFIG.MAX_CONCURRENT}) – zyada = loss risk`;
             updateEngineState({ noTradeReason: reason });
             recordSkipIfSignal(reason);
             return;
         }
-        pendingOpens.add(symbol);
 
         const lastTradeTime = symbolCooldowns.get(symbol) || 0;
         const cooldownRemain = MULTI_SYMBOL_CONFIG.COOLDOWN_MS - (Date.now() - lastTradeTime);
         if (cooldownRemain > 0) {
             const reason = `Cooldown ${Math.ceil(cooldownRemain / 1000)}s`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
+            return;
+        }
+        const globalCooldownRemain = MULTI_SYMBOL_CONFIG.GLOBAL_COOLDOWN_MS - (Date.now() - lastGlobalTradeTime);
+        if (globalCooldownRemain > 0) {
+            const reason = `Global cooldown ${Math.ceil(globalCooldownRemain / 1000)}s (fast order band)`;
             updateEngineState({ noTradeReason: reason });
             recordSkipIfSignal(reason);
             return;
@@ -545,7 +559,26 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
             }
         }
 
-        log(`[MULTI-TRADE] 🎯 SIGNAL on ${symbol}: ${finalSignal.toUpperCase()} via ${signalSource}`, 'trader');
+        // --- ⏱️ SIGNAL CONFIRM: Thoda analyse – same direction 10s tak rahe tab hi order (fast false signal avoid) ---
+        const prev = signalConfirmMap.get(symbol);
+        const now = Date.now();
+        if (!prev || prev.direction !== finalSignal) {
+            signalConfirmMap.set(symbol, { direction: finalSignal, firstSeen: now });
+            const reason = `Signal confirm: wait ${SIGNAL_CONFIRM_MS / 1000}s same direction (analyse)`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
+            return;
+        }
+        const elapsed = now - prev.firstSeen;
+        if (elapsed < SIGNAL_CONFIRM_MS) {
+            const remain = Math.ceil((SIGNAL_CONFIRM_MS - elapsed) / 1000);
+            const reason = `Signal confirm: ${remain}s more (analyse then send)`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
+            return;
+        }
+
+        log(`[MULTI-TRADE] 🎯 SIGNAL on ${symbol}: ${finalSignal.toUpperCase()} via ${signalSource} (confirmed ${(elapsed / 1000).toFixed(0)}s)`, 'trader');
         updateEngineState({ entrySignal: true });
 
         processingMap.set(symbol, true);
@@ -587,12 +620,33 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
             price,
         };
 
-        await executeMultiSymbolTrade(decision, effectiveBalance);
+        // Serialize open: ek hi time pe ek order – re-check count inside lock (4 trade race fix)
+        const doOpen = async () => {
+            let openCount = getLocalPositions().length;
+            try {
+                const res = await getPositions();
+                if (res.success && Array.isArray(res.result)) {
+                    openCount = res.result.filter((p: { size?: number }) => Math.abs(Number(p.size) || 0) > 0).length;
+                }
+            } catch (_) { /* use cache */ }
+            if (openCount >= MULTI_SYMBOL_CONFIG.MAX_CONCURRENT) {
+                updateEngineState({ noTradeReason: `Max positions (${openCount}) – skip` });
+                recordSkipIfSignal(`Max positions ${openCount} (re-check)`);
+                return;
+            }
+            pendingOpens.add(symbol);
+            try {
+                await executeMultiSymbolTrade(decision, effectiveBalance);
+            } finally {
+                pendingOpens.delete(symbol);
+            }
+        };
+        openOrderLock = openOrderLock.then(doOpen);
+        await openOrderLock;
 
     } catch (error) {
         console.error(`[SYMBOL-ENGINE:${symbol}] Error:`, error);
     } finally {
-        pendingOpens.delete(symbol);
         processingMap.set(symbol, false);
     }
 }

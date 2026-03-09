@@ -52,8 +52,19 @@ const POSITION_CONFIG = {
     MAX_HOLDING_TIME: parseInt(process.env.SCALP_MAX_HOLD_S || "60", 10),
     STOP_LOSS_PCT: _slPct > 0 ? -_slPct : _slPct,
     TAKE_PROFIT_PCT: parseFloat(process.env.SCALP_TP_PCT || "0.35"),
-    /** Advance profit booking: jab unrealized profit is amount (USD) ke barabar ho, close. Default 4 */
+    /** Advance profit booking: USD target (base). Time-frame ke hisaab se scale hota hai. */
     TAKE_PROFIT_USD: parseFloat(process.env.SCALP_TP_USD || "4"),
+    /** Dynamic TP by time: early/mid/late (sec). 0–EARLY = quick scalp, EARLY–MID = normal, MID+ = let run */
+    TP_EARLY_SEC: parseInt(process.env.SCALP_TP_EARLY_SEC || "18", 10),
+    TP_MID_SEC: parseInt(process.env.SCALP_TP_MID_SEC || "42", 10),
+    /** USD target per phase: early = chota, mid = base, late = bada */
+    TP_USD_EARLY: parseFloat(process.env.SCALP_TP_USD_EARLY || "2"),
+    TP_USD_MID: parseFloat(process.env.SCALP_TP_USD_MID || "4"),
+    TP_USD_LATE: parseFloat(process.env.SCALP_TP_USD_LATE || "6"),
+    /** % TP per phase (dynamic by time frame) */
+    TP_PCT_EARLY: parseFloat(process.env.SCALP_TP_PCT_EARLY || "0.25"),
+    TP_PCT_MID: parseFloat(process.env.SCALP_TP_PCT_MID || "0.35"),
+    TP_PCT_LATE: parseFloat(process.env.SCALP_TP_PCT_LATE || "0.5"),
     TRAILING_OFFSET_PCT: parseFloat(process.env.SCALP_TRAIL_PCT || "0.15"),
     MIN_CONFIDENCE_HOLD: parseFloat(process.env.SCALP_MIN_CONF_HOLD || "0.7"),
     CONFIDENCE_EXIT_THRESHOLD: parseFloat(process.env.SCALP_CONF_EXIT || "0.5"),
@@ -69,6 +80,22 @@ let lastCacheSync = 0;
 
 export function getLocalPositions(): DeltaPosition[] {
     return localPositionCache;
+}
+
+/** Time-frame ke hisaab se dynamic USD target: early = chota, mid = base, late = bada */
+function getDynamicTpUsd(holdingSec: number): number {
+    const { TP_EARLY_SEC, TP_MID_SEC, TP_USD_EARLY, TP_USD_MID, TP_USD_LATE } = POSITION_CONFIG;
+    if (holdingSec <= TP_EARLY_SEC) return TP_USD_EARLY;
+    if (holdingSec <= TP_MID_SEC) return TP_USD_MID;
+    return TP_USD_LATE;
+}
+
+/** Time-frame ke hisaab se dynamic % TP: early = tight, mid = base, late = let run */
+function getDynamicTpPct(holdingSec: number): number {
+    const { TP_EARLY_SEC, TP_MID_SEC, TP_PCT_EARLY, TP_PCT_MID, TP_PCT_LATE } = POSITION_CONFIG;
+    if (holdingSec <= TP_EARLY_SEC) return TP_PCT_EARLY;
+    if (holdingSec <= TP_MID_SEC) return TP_PCT_MID;
+    return TP_PCT_LATE;
 }
 
 /**
@@ -159,14 +186,17 @@ export async function handleTickerUpdate(symbol: string, currentPrice: number): 
             continue;
         }
 
-        // C.5. Advance profit booking: USD target (e.g. $4) – jitna aacha amount, utna book
-        if (POSITION_CONFIG.TAKE_PROFIT_USD > 0 && pnlUsd >= POSITION_CONFIG.TAKE_PROFIT_USD) {
-            await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `✅ TP (USD): $${pnlUsd.toFixed(2)}`);
+        // C.5. Dynamic profit booking: time-frame ke hisaab – early $2, mid $4, late $6
+        const requiredTpUsd = getDynamicTpUsd(holdingSec);
+        if (requiredTpUsd > 0 && pnlUsd >= requiredTpUsd) {
+            const phase = holdingSec <= POSITION_CONFIG.TP_EARLY_SEC ? 'early' : holdingSec <= POSITION_CONFIG.TP_MID_SEC ? 'mid' : 'late';
+            await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `✅ TP (USD): $${pnlUsd.toFixed(2)} [${phase}]`);
             continue;
         }
 
-        // D. Trailing Stop Activation (TP Hit + High Confidence)
-        if (pnlPercent >= POSITION_CONFIG.TAKE_PROFIT_PCT) {
+        // D. Trailing Stop Activation (TP Hit + High Confidence) – % bhi time-frame dynamic
+        const requiredTpPct = getDynamicTpPct(holdingSec);
+        if (pnlPercent >= requiredTpPct) {
             if (confidence >= POSITION_CONFIG.MIN_CONFIDENCE_HOLD) {
                 // HOLD & TRAIL
                 const trailingOffset = currentPrice * (POSITION_CONFIG.TRAILING_OFFSET_PCT / 100);
@@ -178,8 +208,8 @@ export async function handleTickerUpdate(symbol: string, currentPrice: number): 
                     log(`[DYNAMIC-HOLD] 💎 HOLDING ${symbol} | Confidence: ${confidence.toFixed(2)} | Trailing SL: ${newStop.toFixed(2)}`, 'position-manager');
                 }
             } else {
-                // NORMAL TP EXIT
-                await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `✅ TP HIT: ${pnlPercent.toFixed(2)}%`);
+                // NORMAL TP EXIT (dynamic % by time frame)
+                await closePositionOnTicker(pos, side, currentPrice, pnlPercent, `✅ TP: ${pnlPercent.toFixed(2)}% (target ${requiredTpPct}%)`);
                 continue;
             }
         }

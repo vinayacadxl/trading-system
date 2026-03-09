@@ -27,19 +27,35 @@ SCALP_SPREAD_MAX_PCT=0.15
 
 | Env variable | Default | Advance tip |
 |--------------|---------|-------------|
-| `SCALP_TP_PCT` | 0.35 | **0.45–0.6** = bada target, R:R improve (SL same rakh kar) |
-| **`SCALP_TP_USD`** | **4** | **Advance profit booking:** jab unrealized profit is amount (USD) ke barabar ho, position close. E.g. **4** = $4 profit pe book. 0 = off (sirf % TP use) |
-| `SCALP_SL_PCT` | -0.25 | **-0.2** = tight SL (fast cut), **-0.35** = thoda room |
+| `SCALP_TP_PCT` | 0.35 | Base % TP (dynamic time-frame use kare to ye fallback) |
+| **`SCALP_TP_USD`** | **4** | Base USD target; time-frame ke hisaab **dynamic** (early/mid/late) use hota hai |
+| **Time-frame phases (sec)** | | |
+| `SCALP_TP_EARLY_SEC` | 18 | 0–18s = **early** (quick scalp) |
+| `SCALP_TP_MID_SEC` | 42 | 18–42s = **mid**, 42s+ = **late** (let run) |
+| **USD target per phase** | | |
+| `SCALP_TP_USD_EARLY` | 2 | Early phase: $2 profit pe book |
+| `SCALP_TP_USD_MID` | 4 | Mid: $4 |
+| `SCALP_TP_USD_LATE` | 6 | Late: $6 tak hold kar sakte ho |
+| **% TP per phase (dynamic)** | | |
+| `SCALP_TP_PCT_EARLY` | 0.25 | Early: 0.25% pe TP |
+| `SCALP_TP_PCT_MID` | 0.35 | Mid: 0.35% |
+| `SCALP_TP_PCT_LATE` | 0.5 | Late: 0.5% (zyada room) |
+| `SCALP_SL_PCT` | -0.25 | **-0.2** = tight SL, **-0.35** = thoda room |
 | `SCALP_TRAIL_PCT` | 0.15 | **0.12** = jaldi trail lock, **0.2** = zyada room |
-| `SCALP_MAX_HOLD_S` | 60 | **90–120** = hold longer for TP; **45** = quick scalp only |
+| `SCALP_MAX_HOLD_S` | 60 | **90–120** = hold longer; **45** = quick scalp only |
 
-**Example (better R:R + $4 profit book):**
+**Example (dynamic profit book – time frame ke according):**
 ```env
-SCALP_TP_PCT=0.5
-SCALP_TP_USD=4
+SCALP_TP_EARLY_SEC=18
+SCALP_TP_MID_SEC=42
+SCALP_TP_USD_EARLY=2
+SCALP_TP_USD_MID=4
+SCALP_TP_USD_LATE=6
+SCALP_TP_PCT_EARLY=0.25
+SCALP_TP_PCT_MID=0.35
+SCALP_TP_PCT_LATE=0.5
 SCALP_SL_PCT=-0.25
-SCALP_TRAIL_PCT=0.12
-SCALP_MAX_HOLD_S=90
+SCALP_MAX_HOLD_S=60
 ```
 
 ---
@@ -58,7 +74,9 @@ SCALP_MAX_HOLD_S=90
 | Env variable | Default | Advance tip |
 |--------------|---------|-------------|
 | `SCALP_CAPITAL_PER_TRADE` | 0.20 | **0.15** = chota size = kam risk |
-| `MULTI_SYMBOL_MAX_CONCURRENT` | 1 | **2** agar 2 positions chahiye; 1 = minimal risk |
+| `MULTI_SYMBOL_MAX_CONCURRENT` | 2 | **Hard-cap 2** (4 trade band). 1 = sirf ek position |
+| `GLOBAL_COOLDOWN_MS` | 20000 | Koi bhi ek trade ke baad **20s** wait – fast back-to-back order band |
+| `SIGNAL_CONFIRM_MS` | 10000 | **10s** same direction signal pe hi order – pehle analyse, phir send |
 | `SCANNER_TICK_MS` | 8000 | **5000** = faster reaction to scanner signals |
 
 ---
