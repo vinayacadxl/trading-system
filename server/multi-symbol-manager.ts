@@ -36,7 +36,7 @@ class MultiSymbolManager {
             symbols: ["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "LINKUSD", "BCHUSD", "LTCUSD"],
             scanInterval: parseInt(process.env.MULTI_SYMBOL_SCAN_INTERVAL_MS || "5000", 10), // fast mode default 5s
             enableAutoTrade: false,
-            maxConcurrentPositions: 5, // Flow: Max 5 positions
+            maxConcurrentPositions: Math.min(5, Math.max(1, parseInt(process.env.MULTI_SYMBOL_MAX_CONCURRENT || "2", 10))), // default 2
             capitalPerSymbol: 20, // ~20% per symbol for 5 positions
             ...config,
         };
@@ -155,9 +155,9 @@ class MultiSymbolManager {
         // --- Step 5: Final cap & visibility rule ---
         const rounded = Math.round(strength);
 
-        // Cap at 85 if regime is weak OR confidence is low
-        if (rounded >= 95 && (!isStrongRegime || confidence < weights.momentumThreshold)) {
-            return 85;
+        // Cap at 95 if regime is weak to keep 100% for premium signals
+        if (rounded >= 98 && (!isStrongRegime || confidence < weights.momentumThreshold - 5)) {
+            return 95;
         }
 
         return Math.min(rounded, 100);
@@ -194,7 +194,7 @@ class MultiSymbolManager {
                 confOnlyWt: 0.60,   // fallback without AI
                 regimeBonusStrong: 20,
                 regimeBonusWeak: 12,
-                momentumThreshold: 80,  // lower bar — trend gives extra conviction
+                momentumThreshold: 75,  // lower bar — trend gives extra conviction
                 momentumPts: 10,
             };
         }
@@ -202,13 +202,13 @@ class MultiSymbolManager {
         if (isRange) {
             // RANGE market: Technical indicators (RSI, BB) more reliable than AI trend models
             return {
-                confWt: 0.40,       // higher technical weight
-                aiWt: 0.20,         // AI less useful in choppy markets
-                confOnlyWt: 0.60,
+                confWt: 0.45,       // higher technical weight
+                aiWt: 0.15,         // AI less useful in choppy markets
+                confOnlyWt: 0.65,
                 regimeBonusStrong: 15,
-                regimeBonusWeak: 8,
-                momentumThreshold: 85, // need higher confidence before executing
-                momentumPts: 7,
+                regimeBonusWeak: 10,
+                momentumThreshold: 80, // need higher confidence before executing
+                momentumPts: 8,
             };
         }
 
@@ -220,19 +220,19 @@ class MultiSymbolManager {
                 confOnlyWt: 0.50,   // lower fallback cap
                 regimeBonusStrong: 10,
                 regimeBonusWeak: 5,
-                momentumThreshold: 90, // stricter gate — volatility = higher risk
+                momentumThreshold: 85, // stricter gate — volatility = higher risk
                 momentumPts: 5,     // smaller momentum bonus
             };
         }
 
         // Default / unknown regime: balanced
         return {
-            confWt: 0.30,
-            aiWt: 0.30,
+            confWt: 0.35,
+            aiWt: 0.25,
             confOnlyWt: 0.60,
             regimeBonusStrong: 12,
             regimeBonusWeak: 8,
-            momentumThreshold: 85,
+            momentumThreshold: 80,
             momentumPts: 8,
         };
     }

@@ -137,11 +137,8 @@ export function getScalperSignal(symbol: string): { signal: "buy" | "sell" | nul
   const bestAsk = parseFloat(ob.asks[0].price);
   const spread = bestAsk - bestBid;
 
-  // Estimate tick size (handle case with < 2 bid levels)
-  const tickSize = ob.bids.length >= 2
-    ? Math.max(0.0001, Math.abs(parseFloat(ob.bids[0].price) - parseFloat(ob.bids[1].price)))
-    : Math.max(0.0001, bestBid * 0.0001);
-  const spreadTicks = spread / tickSize;
+  // Estimate spread percentage instead of ticks (Delta spreads can vary wildly)
+  const spreadPct = (spread / bestBid) * 100;
 
   // 3. Trade Momentum (Last 5 trades)
   const last5 = trades.slice(-5);
@@ -149,31 +146,41 @@ export function getScalperSignal(symbol: string): { signal: "buy" | "sell" | nul
   const sellTrades = last5.filter((t: any) => t.side === 'sell').length;
   const hasTrades = last5.length >= 2;
 
-  // --- BUY CONDITION (relaxed: imbalance > 1.2, spread <= 5 ticks, >= 2/5 buys) ---
-  if (imbalance > 1.2 && spreadTicks <= 5.0 && (!hasTrades || buyTrades >= 2)) {
+  // Spread: env SCALP_SPREAD_MAX_PCT (default 0.2 = 20 BPS). Tighter = fewer but higher quality entries.
+  const spreadMaxPct = parseFloat(process.env.SCALP_SPREAD_MAX_PCT || "0.2");
+  const spreadOk = spreadPct <= spreadMaxPct;
+
+  // Imbalance thresholds: SCALP_IMBALANCE_BUY / SCALP_IMBALANCE_SELL. Stricter = 1.2/0.8, relaxed = 1.05/0.95
+  const imbBuy = parseFloat(process.env.SCALP_IMBALANCE_BUY || "1.10");
+  const imbSell = parseFloat(process.env.SCALP_IMBALANCE_SELL || "0.90");
+
+  // --- BUY CONDITION ---
+  if (imbalance > imbBuy && spreadOk && (!hasTrades || buyTrades >= 1)) {
     return {
       signal: 'buy',
-      reason: `IMBALANCE: ${imbalance.toFixed(2)} | SPREAD: ${spreadTicks.toFixed(1)} ticks | MOMENTUM: ${buyTrades}/5 BUY`
+      reason: `IMBALANCE: ${imbalance.toFixed(2)} | SPREAD: ${spreadPct.toFixed(3)}% | MOMENTUM: ${buyTrades}/5 BUY`
     };
   }
 
-  // --- SELL CONDITION (relaxed: imbalance < 0.83, spread <= 5 ticks, >= 2/5 sells) ---
-  if (imbalance < 0.83 && spreadTicks <= 5.0 && (!hasTrades || sellTrades >= 2)) {
+  // --- SELL CONDITION ---
+  if (imbalance < imbSell && spreadOk && (!hasTrades || sellTrades >= 1)) {
     return {
       signal: 'sell',
-      reason: `IMBALANCE: ${imbalance.toFixed(2)} | SPREAD: ${spreadTicks.toFixed(1)} ticks | MOMENTUM: ${sellTrades}/5 SELL`
+      reason: `IMBALANCE: ${imbalance.toFixed(2)} | SPREAD: ${spreadPct.toFixed(3)}% | MOMENTUM: ${sellTrades}/5 SELL`
     };
   }
 
-  // --- PURE IMBALANCE FALLBACK (strong imbalance even without trade history) ---
-  if (imbalance >= 1.5 && spreadTicks <= 8.0) {
+  // --- PURE IMBALANCE FALLBACK (strong imbalance) ---
+  const imbStrongBuy = parseFloat(process.env.SCALP_IMBALANCE_STRONG_BUY || "1.25");
+  const imbStrongSell = parseFloat(process.env.SCALP_IMBALANCE_STRONG_SELL || "0.80");
+  if (imbalance >= imbStrongBuy && spreadOk) {
     return { signal: 'buy', reason: `STRONG IMBALANCE BUY: ${imbalance.toFixed(2)}` };
   }
-  if (imbalance <= 0.67 && spreadTicks <= 8.0) {
+  if (imbalance <= imbStrongSell && spreadOk) {
     return { signal: 'sell', reason: `STRONG IMBALANCE SELL: ${imbalance.toFixed(2)}` };
   }
 
-  return { signal: null, reason: `Neutral (Imb: ${imbalance.toFixed(2)}, Spread: ${spreadTicks.toFixed(1)}t)` };
+  return { signal: null, reason: `Neutral (Imb: ${imbalance.toFixed(2)}, Sprd: ${spreadPct.toFixed(3)}%)` };
 }
 
 

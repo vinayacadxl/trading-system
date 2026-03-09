@@ -85,9 +85,25 @@ function ECell({ lbl, val, t }: { lbl: string; val: string; t?: "g" | "r" | "a" 
     );
 }
 
+function useDailyPnl(refreshMs = 15_000) {
+    const [dailyPnl, setDailyPnl] = useState<number | null>(null);
+    useEffect(() => {
+        const fetchPnl = () =>
+            fetch("/api/bot/risk-status")
+                .then((r) => r.json())
+                .then((d) => { if (d?.dailyPnl != null) setDailyPnl(Number(d.dailyPnl)); })
+                .catch(() => {});
+        fetchPnl();
+        const id = setInterval(fetchPnl, refreshMs);
+        return () => clearInterval(id);
+    }, [refreshMs]);
+    return dailyPnl;
+}
+
 export default function Dashboard() {
     const { data: port, error: portError } = usePortfolio(15_000);
     const { positions, unrealizedPnl } = usePositions(8_000);
+    const dailyPnl = useDailyPnl(15_000);
     const { tickers, connected } = useLiveDelta();
     const e = useEngineStatus();
     const sigs = useSignals();
@@ -104,6 +120,7 @@ export default function Dashboard() {
     const score = e.confidence?.score ?? 0;
     const posArr = positions ?? [];
     const unPnl = unrealizedPnl ?? 0;
+    const todayPnl = dailyPnl ?? 0;
 
     return (
         <>
@@ -175,6 +192,9 @@ export default function Dashboard() {
                     <StatCard label="Unrealised PNL" value={`${unPnl >= 0 ? "+" : ""}$${fmt(unPnl)}`}
                         sub={`${posArr.length} open position${posArr.length !== 1 ? "s" : ""}`}
                         tone={unPnl >= 0 ? "g" : "r"} Icon={unPnl >= 0 ? TrendingUp : TrendingDown} />
+                    <StatCard label="Today's PnL" value={`${todayPnl >= 0 ? "+" : ""}$${fmt(todayPnl)}`}
+                        sub="Realised (closed trades today)"
+                        tone={todayPnl >= 0 ? "g" : "r"} Icon={todayPnl >= 0 ? TrendingUp : TrendingDown} />
                     <StatCard label="Bot Status" value={(e as any).wsConnected ? "LIVE" : "OFFLINE"}
                         sub={(e as any).wsConnected ? "Scanning markets" : "No connection"}
                         tone={(e as any).wsConnected ? "g" : "r"} Icon={Cpu} />

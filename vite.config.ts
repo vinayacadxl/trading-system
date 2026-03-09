@@ -51,13 +51,13 @@ export default defineConfig({
     // ONLY active when running standalone (e.g. npm run dev:client on :5173)
     proxy: process.env.VITE_DEV_SERVER_PORT ? {} : {
       "/api": {
-        target: "http://127.0.0.1:5001",
+        target: "http://127.0.0.1:5008",
         changeOrigin: true,
         timeout: 60000,
         proxyTimeout: 60000,
       },
       "/socket.io": {
-        target: "http://127.0.0.1:5001",
+        target: "http://127.0.0.1:5008",
         changeOrigin: true,
         ws: true,
         timeout: 60000,

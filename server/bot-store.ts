@@ -331,12 +331,13 @@ const signals: StoredSignal[] = [];
 
 export function botRecordSignal(signal: Omit<StoredSignal, "id" | "time">) {
   const last = signals[signals.length - 1];
-  // Deduplicate: same signal, same reason, within 5 minutes (300000ms)
+  // Deduplicate: same symbol/signal/action/reason within 90s so Signal History stays readable but not empty
   if (last &&
+    last.symbol === signal.symbol &&
     last.signal === signal.signal &&
     last.action === signal.action &&
     last.reason === signal.reason &&
-    Date.now() - last.time < 300_000) {
+    Date.now() - last.time < 90_000) {
     return;
   }
 

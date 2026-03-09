@@ -43,7 +43,7 @@ export function usePositions(refreshIntervalMs = 60_000) {
       }
       const errMsg = (json as { errorMessage?: string }).errorMessage;
       if (errMsg) setError(errMsg);
-      const list = (json.positions as DeltaPosition[]) ?? [];
+      const list = ((json.result ?? json.positions) as DeltaPosition[]) ?? [];
       setPositions(list);
       // Unrealized PnL: Use API value to avoid contract_value calculation errors
       let pnl = 0;

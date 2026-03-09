@@ -46,13 +46,15 @@ export interface ManagedPosition {
     closeReason?: string;
 }
 
+// Advanced scalping: .env se override. SL = negative % (e.g. SCALP_SL_PCT=0.25 => -0.25%)
+const _slPct = parseFloat(process.env.SCALP_SL_PCT || "0.25");
 const POSITION_CONFIG = {
-    MAX_HOLDING_TIME: 60, // 60s max hold time
-    STOP_LOSS_PCT: -0.25, // 0.25% SL
-    TAKE_PROFIT_PCT: 0.35, // 0.35% TP
-    TRAILING_OFFSET_PCT: 0.15, // 0.15% trailing
-    MIN_CONFIDENCE_HOLD: 0.7, // Hold past TP if conf > 0.7
-    CONFIDENCE_EXIT_THRESHOLD: 0.5, // Exit if conf < 0.5
+    MAX_HOLDING_TIME: parseInt(process.env.SCALP_MAX_HOLD_S || "60", 10),
+    STOP_LOSS_PCT: _slPct > 0 ? -_slPct : _slPct,
+    TAKE_PROFIT_PCT: parseFloat(process.env.SCALP_TP_PCT || "0.35"),
+    TRAILING_OFFSET_PCT: parseFloat(process.env.SCALP_TRAIL_PCT || "0.15"),
+    MIN_CONFIDENCE_HOLD: parseFloat(process.env.SCALP_MIN_CONF_HOLD || "0.7"),
+    CONFIDENCE_EXIT_THRESHOLD: parseFloat(process.env.SCALP_CONF_EXIT || "0.5"),
 };
 
 // --- ⚡ REAL-TIME STATE ⚡ ---

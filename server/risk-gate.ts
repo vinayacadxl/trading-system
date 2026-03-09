@@ -123,8 +123,8 @@ const CORRELATED_BUCKETS: Record<string, string[]> = {
   // alts can be one bucket or separate; for now we only limit majors
 };
 
-const MAX_POSITIONS_PER_DIRECTION = parseInt(process.env.RISK_MAX_POSITIONS_PER_DIRECTION || '2', 10);
-const MAX_POSITIONS_PER_BUCKET = parseInt(process.env.RISK_MAX_POSITIONS_PER_BUCKET || '1', 10);
+const MAX_POSITIONS_PER_DIRECTION = parseInt(process.env.RISK_MAX_POSITIONS_PER_DIRECTION || '3', 10);
+const MAX_POSITIONS_PER_BUCKET = parseInt(process.env.RISK_MAX_POSITIONS_PER_BUCKET || '2', 10);
 
 export interface PositionForExposure {
   symbol: string;

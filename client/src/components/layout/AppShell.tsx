@@ -31,10 +31,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     const active = to === "/" ? loc === "/" : loc.startsWith(to);
                     return (
                         <Link key={to} href={to}>
-                            <a className={`nav-item${active ? " active" : ""}`}>
+                            <div className={`nav-item${active ? " active" : ""}`}>
                                 <Icon size={15} />
                                 {label}
-                            </a>
+                            </div>
                         </Link>
                     );
                 })}
@@ -55,10 +55,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         const active = to === "/" ? loc === "/" : loc.startsWith(to);
                         return (
                             <Link key={to} href={to}>
-                                <a className={`m-nav-item${active ? " active" : ""}`}>
+                                <div className={`m-nav-item${active ? " active" : ""}`}>
                                     <Icon size={20} />
                                     <span>{label}</span>
-                                </a>
+                                </div>
                             </Link>
                         );
                     })}

@@ -245,13 +245,38 @@ export function log(message: string, source = "bot") {
           dashboardMomentum = effectiveChangePct > 3 ? "HIGH" : effectiveChangePct > 1 ? "MEDIUM" : "LOW";
         }
 
-        updateEngineState({ momentum: dashboardMomentum, lastPrice: price, confidence: dashboardConfidence });
+        const scannerResults: any = {};
+        for (const s of allSymbols) {
+          const sig = manager.getSignal(s);
+          if (sig) scannerResults[s] = sig;
+        }
+
+        updateEngineState({
+          momentum: dashboardMomentum,
+          lastPrice: price,
+          confidence: dashboardConfidence,
+          scanner: scannerResults
+        } as any);
 
         handleTickerUpdate(payload.symbol, price);
       }
     },
     log,
   });
+
+  // --- 📡 SCANNER TICK: Run handleOrderbookUpdate for symbols with ENTRY SIGNAL so Signal History + trades work even if orderbook WS is slow
+  const SCANNER_TICK_MS = parseInt(process.env.SCANNER_TICK_MS || "8000", 10);
+  setInterval(async () => {
+    try {
+      const signals = manager.getAllSignals();
+      for (const sig of signals) {
+        if (sig.direction !== "neutral" && sig.signalStrength >= 35 && sig.lastPrice > 0) {
+          await handleOrderbookUpdate(sig.symbol, sig.lastPrice);
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+    } catch (_) { /* ignore */ }
+  }, SCANNER_TICK_MS);
 
   log("✅ System is ONLINE. Bot is scalping, Dashboard is live.");
 })();

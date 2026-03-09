@@ -89,20 +89,46 @@ export interface TradeDecision {
     volatility?: 'LOW_SQUEEZE' | 'NORMAL' | 'HIGH_EXPANSION' | 'EXTREME_VOLATILITY';
 }
 
+// Max 2 trade: ek sath 2 se zyada positions nahi. 1 chaho to .env me MULTI_SYMBOL_MAX_CONCURRENT=1
 const MULTI_SYMBOL_CONFIG = {
-    MIN_STRENGTH: 35,
-    MIN_CONFIDENCE: 40,
-    MAX_CONCURRENT: 2,
-    CAPITAL_PER_TRADE: 0.15,
-    SL_PCT: 0.25,
-    TP_PCT: 0.35,
-    DAILY_LOSS_LIMIT_USD: 5.0,   // ← Increased from $2 to $5 (was blocking too many trades)
-    COOLDOWN_MS: 90000,
+    MIN_STRENGTH: 25,           // Lowered from 30 for high sensitivity
+    MIN_CONFIDENCE: 25,         // Lowered from 35
+    MAX_CONCURRENT: Math.min(5, Math.max(1, parseInt(process.env.MULTI_SYMBOL_MAX_CONCURRENT || "2", 10))), // default 2, 1–5 allowed
+    CAPITAL_PER_TRADE: parseFloat(process.env.SCALP_CAPITAL_PER_TRADE || "0.20"),
+    SL_PCT: parseFloat(process.env.SCALP_SL_PCT || "0.25"),
+    TP_PCT: parseFloat(process.env.SCALP_TP_PCT || "0.45"),
+    DAILY_LOSS_LIMIT_USD: 20.0, // Increased from $5 to $20
+    COOLDOWN_MS: 30000,         // Reduced cooldown from 60s to 30s
     TRADE_MODE: 'all',
-    MAX_LOSS_PER_TRADE_PCT: 3,
+    MAX_LOSS_PER_TRADE_PCT: 5,
 };
 
 const symbolCooldowns = new Map<string, number>();
+/** Symbols currently in the process of opening (order placed, not yet in Delta list) – in count so 3rd trade na khul jaye */
+const pendingOpens = new Set<string>();
+
+// --- 📉 TREND FILTER: Ulti trade band — BUY sirf uptrend/neutral, SELL sirf downtrend/neutral
+const TREND_FILTER_ENABLED = process.env.TREND_FILTER !== '0';
+const priceHistoryForTrend = new Map<string, number[]>();
+const TREND_LOOKBACK = 8;
+const TREND_THRESHOLD_PCT = 0.04; // 0.04% move = trend
+
+function getShortTermTrend(symbol: string, currentPrice: number): 'up' | 'down' | 'neutral' {
+    let arr = priceHistoryForTrend.get(symbol) || [];
+    arr.push(currentPrice);
+    if (arr.length > TREND_LOOKBACK + 2) arr = arr.slice(-(TREND_LOOKBACK + 2));
+    priceHistoryForTrend.set(symbol, arr);
+
+    if (arr.length < TREND_LOOKBACK + 1) return 'neutral';
+    const recent = arr[arr.length - 1];
+    const prev = arr.slice(arr.length - TREND_LOOKBACK - 1, arr.length - 1);
+    const avg = prev.reduce((a, b) => a + b, 0) / prev.length;
+    if (avg <= 0) return 'neutral';
+    const chPct = ((recent - avg) / avg) * 100;
+    if (chPct >= TREND_THRESHOLD_PCT) return 'up';
+    if (chPct <= -TREND_THRESHOLD_PCT) return 'down';
+    return 'neutral';
+}
 
 const ORDER_SLICE_NOTIONAL_THRESHOLD = parseFloat(process.env.ORDER_SLICE_NOTIONAL_THRESHOLD || "0");
 const ORDER_SLICE_COUNT = Math.max(2, Math.min(5, parseInt(process.env.ORDER_SLICE_COUNT || "3", 10)));
@@ -221,11 +247,19 @@ export async function executeMultiSymbolTrade(
     try {
         const dailyCount = await getDailyTradeCount();
         if (dailyCount >= MAX_DAILY_TRADES) {
+            botRecordSignal({
+                symbol: decision.symbol, signal: decision.signal, confidence: decision.confidence,
+                action: 'skipped', reason: `Daily trade cap reached`, price: String(decision.price)
+            });
             return { success: false, error: { message: 'Daily trade cap reached' } };
         }
 
         const sizeMultiplier = await getConsecutiveLossSizeMultiplier();
         if (cachedDailyPnl <= -MULTI_SYMBOL_CONFIG.DAILY_LOSS_LIMIT_USD) {
+            botRecordSignal({
+                symbol: decision.symbol, signal: decision.signal, confidence: decision.confidence,
+                action: 'skipped', reason: `Daily loss limit hit`, price: String(decision.price)
+            });
             return { success: false, error: { message: 'Daily loss limit hit' } };
         }
 
@@ -248,6 +282,10 @@ export async function executeMultiSymbolTrade(
 
         const size = calculateMultiSymbolSize(balanceUsd, decision.price, leverage, decision.symbol, decision.volatility, sizeMultiplier);
         if (size < 0.0001) {
+            botRecordSignal({
+                symbol: decision.symbol, signal: decision.signal, confidence: decision.confidence,
+                action: 'failed', reason: `Size too small: ${size.toFixed(4)}`, price: String(decision.price)
+            });
             return { success: false, error: { message: `Size too small: ${size.toFixed(4)}` } };
         }
 
@@ -361,45 +399,81 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
         });
     }
 
+    const recordSkipIfSignal = (reason: string) => {
+        const mgr = getMultiSymbolManager();
+        const scannerSig = mgr.getSignal(symbol);
+        if (scannerSig && scannerSig.direction !== 'neutral' && scannerSig.signalStrength >= 15) {
+            botRecordSignal({
+                symbol: scannerSig.symbol || symbol,
+                signal: scannerSig.direction,
+                confidence: scannerSig.confidence ?? scannerSig.signalStrength,
+                action: 'skipped',
+                reason,
+                price: String(price || scannerSig.lastPrice || 0)
+            });
+        }
+    };
+
     try {
         if (!marketState.tradable) {
             updateEngineState({ noTradeReason: "Market not tradable" });
+            recordSkipIfSignal("Market not tradable");
             return;
         }
 
         // --- ✅ BALANCE CHECK: Use last-known balance if API fails ---
         const effectiveBalance = cachedBalance > 0 ? cachedBalance : FALLBACK_BALANCE_USD;
         if (effectiveBalance < 5) {
-            updateEngineState({ noTradeReason: `Balance low: $${effectiveBalance.toFixed(0)}` });
+            const reason = `Balance low: $${effectiveBalance.toFixed(0)}`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
             log(`[MULTI-TRADE] Balance too low or unknown: $${effectiveBalance.toFixed(2)}`, 'trader');
             return;
         }
 
         if (cachedDailyPnl <= -MULTI_SYMBOL_CONFIG.DAILY_LOSS_LIMIT_USD) {
-            updateEngineState({ noTradeReason: `Daily loss limit ($${Math.abs(cachedDailyPnl).toFixed(0)})` });
+            const reason = `Daily loss limit ($${Math.abs(cachedDailyPnl).toFixed(0)})`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
             return;
         }
         if (cachedDailyTradeCount >= MAX_DAILY_TRADES) {
-            updateEngineState({ noTradeReason: `Max daily trades (${cachedDailyTradeCount}/${MAX_DAILY_TRADES})` });
+            const reason = `Max daily trades (${cachedDailyTradeCount}/${MAX_DAILY_TRADES})`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
             return;
         }
 
         // --- ✅ PRICE SAFETY CHECK ---
         if (!price || isNaN(price) || price <= 0) {
             updateEngineState({ noTradeReason: "Invalid price" });
+            recordSkipIfSignal("Invalid price");
             return;
         }
 
-        const openPositions = getLocalPositions();
-        if (openPositions.length >= MULTI_SYMBOL_CONFIG.MAX_CONCURRENT) {
-            updateEngineState({ noTradeReason: `Max positions (${openPositions.length}/${MULTI_SYMBOL_CONFIG.MAX_CONCURRENT})` });
+        // Live count from Delta + pending opens (cache/race se 3 trade na khul jaye – max 2 hi rahe)
+        let openCount = getLocalPositions().length;
+        try {
+            const res = await getPositions();
+            if (res.success && Array.isArray(res.result)) {
+                openCount = res.result.filter((p: { size?: number }) => Math.abs(Number(p.size) || 0) > 0).length;
+            }
+        } catch (_) { /* use cache count */ }
+        const totalWithPending = openCount + pendingOpens.size;
+        if (totalWithPending >= MULTI_SYMBOL_CONFIG.MAX_CONCURRENT) {
+            const reason = `Max positions (${openCount}+${pendingOpens.size}=${totalWithPending}/${MULTI_SYMBOL_CONFIG.MAX_CONCURRENT}) – zyada positions = zyada loss risk`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
             return;
         }
+        pendingOpens.add(symbol);
 
         const lastTradeTime = symbolCooldowns.get(symbol) || 0;
         const cooldownRemain = MULTI_SYMBOL_CONFIG.COOLDOWN_MS - (Date.now() - lastTradeTime);
         if (cooldownRemain > 0) {
-            updateEngineState({ noTradeReason: `Cooldown ${Math.ceil(cooldownRemain / 1000)}s` });
+            const reason = `Cooldown ${Math.ceil(cooldownRemain / 1000)}s`;
+            updateEngineState({ noTradeReason: reason });
+            recordSkipIfSignal(reason);
             return;
         }
 
@@ -437,9 +511,38 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
                 if (scannerSig.direction === "neutral") reason = "Scanner: neutral";
                 else if (scannerSig.signalStrength < 35) reason = `Scanner strength ${scannerSig.signalStrength}% < 35%`;
                 else if ((Date.now() - scannerSig.lastUpdate) >= 30000) reason = "Scanner signal >30s old";
+
+                // Log skipped signal into DB/memory so UI can show it
+                if (scannerSig.direction !== 'neutral' && scannerSig.signalStrength >= 15) {
+                    botRecordSignal({
+                        symbol: scannerSig.symbol || symbol,
+                        signal: scannerSig.direction,
+                        confidence: scannerSig.confidence || scannerSig.signalStrength,
+                        action: 'skipped',
+                        reason: reason,
+                        price: String(price)
+                    });
+                }
             }
             updateEngineState({ entrySignal: false, noTradeReason: reason });
             return;
+        }
+
+        // --- 📉 TREND FILTER: Jis trend pe trade leni chahiye, ulti trade mat lo ---
+        if (TREND_FILTER_ENABLED) {
+            const trend = getShortTermTrend(symbol, price);
+            if (finalSignal === 'buy' && trend === 'down') {
+                const reason = `Trend filter: price trend DOWN, skipping BUY (ulti trade avoid)`;
+                updateEngineState({ noTradeReason: reason });
+                recordSkipIfSignal(reason);
+                return;
+            }
+            if (finalSignal === 'sell' && trend === 'up') {
+                const reason = `Trend filter: price trend UP, skipping SELL (ulti trade avoid)`;
+                updateEngineState({ noTradeReason: reason });
+                recordSkipIfSignal(reason);
+                return;
+            }
         }
 
         log(`[MULTI-TRADE] 🎯 SIGNAL on ${symbol}: ${finalSignal.toUpperCase()} via ${signalSource}`, 'trader');
@@ -458,14 +561,30 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
         if (!exp.ok) {
             updateEngineState({ noTradeReason: `Exposure: ${exp.reason}` });
             log(`[MULTI-TRADE] Exposure limit: ${exp.reason}`, 'trader');
+
+            botRecordSignal({
+                symbol,
+                signal: finalSignal,
+                confidence: 90, // placeholder, actual varies
+                action: 'skipped',
+                reason: `Exposure limit: ${exp.reason}`,
+                price: String(price)
+            });
+
             processingMap.set(symbol, false);
             return;
         }
 
         updateEngineState({ noTradeReason: "" });
+        const manager = getMultiSymbolManager();
+        const scannerSig = manager.getSignal(symbol);
+
         const decision: TradeDecision = {
             symbol, signal: finalSignal,
-            strength: 90, confidence: 90, score: 100, price,
+            strength: scannerSig?.signalStrength || 90,
+            confidence: scannerSig?.confidence || 90,
+            score: (scannerSig?.signalStrength || 90) * 1.1,
+            price,
         };
 
         await executeMultiSymbolTrade(decision, effectiveBalance);
@@ -473,6 +592,7 @@ export async function handleOrderbookUpdate(symbol: string, price: number) {
     } catch (error) {
         console.error(`[SYMBOL-ENGINE:${symbol}] Error:`, error);
     } finally {
+        pendingOpens.delete(symbol);
         processingMap.set(symbol, false);
     }
 }
